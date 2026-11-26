@@ -3,6 +3,7 @@ import '../../core/theme/app_theme.dart';
 import '../../models/account.dart';
 import '../../models/savings_rule.dart';
 import '../../providers/finance_provider.dart';
+import 'confirm_delete_dialog.dart';
 
 class SavingsRuleSheet extends StatefulWidget {
   final FinanceProvider provider;
@@ -130,7 +131,14 @@ class _SavingsRuleSheetState extends State<SavingsRuleSheet> {
 
   Future<void> _delete() async {
     if (!_isEditing) return;
-    await widget.provider.deleteSavingsRule(widget.existingRule!.id);
+    final rule = widget.existingRule!;
+    final confirmed = await showConfirmDeleteDialog(
+      context,
+      title: '¿Eliminar regla de ahorro?',
+      message: 'Se eliminará la regla "${rule.name}".',
+    );
+    if (!confirmed || !mounted) return;
+    await widget.provider.deleteSavingsRule(rule.id);
     if (mounted) Navigator.pop(context);
   }
 

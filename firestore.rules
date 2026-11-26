@@ -4,469 +4,76 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // All user data is strictly isolated under /users/{userId} where
-    // userId == request.auth.uid.
-    //
-    // Document: users/{userId}
-    //   Optional user metadata document:
-    //   - email: string (optional/nullable, valid email, <= 320 chars)
-    //   - displayName: string (optional/nullable, <= 120 chars)
-    //   - uid: string (optional/nullable, must equal request.auth.uid, immutable)
-    //   - createdAt: timestamp | ISO string (optional/nullable, immutable once set)
-    //   - migratedAt: timestamp | ISO string (optional/nullable)
-    //   - updatedAt: timestamp | ISO string (optional/nullable)
-    //
-    // Subcollections under users/{userId}:
-    //   1. accounts/{docId}            (Account model + optional updatedAt)
-    //   2. transactions/{docId}        (Transaction model + optional updatedAt)
-    //   3. commitments/{docId}         (BudgetCommitment model + optional updatedAt)
-    //   4. savingsRules/{docId}        (SavingsRule model + optional updatedAt)
-    //   5. pendingTransfers/{docId}    (PendingTransfer model + optional updatedAt)
-    //   6. recurringIncomes/{docId}    (RecurringIncome model + optional updatedAt)
-    //   7. pendingIncomes/{docId}      (PendingIncome model + optional updatedAt)
-    //   8. payOccurrences/{docId}      (ScheduledPayOccurrence model + optional updatedAt)
-    //   9. installmentPlans/{docId}    (CreditInstallmentPlan model + optional updatedAt)
-    //  10. importedStatements/{docId}  (ImportedStatement model + optional updatedAt)
-    //
-    // Note: Flutter models serialize nullable fields as explicit null values
-    // in JSON maps, so optional fields accept either null or the expected type.
-    //
-    // ===============================================================
-
-    // ===============================================================
     // Helper Functions
     // ===============================================================
 
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
     function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+      return request.auth != null && request.auth.uid == userId;
     }
 
-    function uidUnchanged() {
-      return !('uid' in request.resource.data) ||
-        request.resource.data.uid == null ||
-        request.resource.data.uid == request.auth.uid;
-    }
-
-    function uidNotModified() {
-      return !('uid' in request.resource.data) ||
-        !('uid' in resource.data) ||
-        request.resource.data.uid == resource.data.uid;
-    }
-
-    function hasRequiredFields(fields) {
-      return request.resource.data.keys().hasAll(fields);
-    }
-
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
-    }
-
-    function isRequiredString(field, minLen, maxLen) {
-      return field in request.resource.data &&
-        request.resource.data[field] is string &&
-        request.resource.data[field].size() >= minLen &&
-        request.resource.data[field].size() <= maxLen;
-    }
-
-    function isNullableString(field, maxLen) {
-      return !(field in request.resource.data) ||
-        request.resource.data[field] == null ||
-        (request.resource.data[field] is string &&
-         request.resource.data[field].size() <= maxLen);
-    }
-
-    function isRequiredNumber(field) {
-      return field in request.resource.data &&
-        request.resource.data[field] is number;
-    }
-
-    function isRequiredNonNegativeNumber(field) {
-      return field in request.resource.data &&
-        request.resource.data[field] is number &&
-        request.resource.data[field] >= 0;
-    }
-
-    function isNullableNumber(field) {
-      return !(field in request.resource.data) ||
-        request.resource.data[field] == null ||
-        request.resource.data[field] is number;
-    }
-
-    function isNullableNonNegativeNumber(field) {
-      return !(field in request.resource.data) ||
-        request.resource.data[field] == null ||
-        (request.resource.data[field] is number &&
-         request.resource.data[field] >= 0);
-    }
-
-    function isNullableIntInRange(field, minVal, maxVal) {
-      return !(field in request.resource.data) ||
-        request.resource.data[field] == null ||
-        (request.resource.data[field] is int &&
-         request.resource.data[field] >= minVal &&
-         request.resource.data[field] <= maxVal);
-    }
-
-    function isNullableBool(field) {
-      return !(field in request.resource.data) ||
-        request.resource.data[field] == null ||
-        request.resource.data[field] is bool;
-    }
-
-    function isValidEmail(email) {
-      return email is string &&
-        email.size() <= 320 &&
-        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
-    }
-
-    function isValidTimestampOrIso(val) {
-      return val is timestamp ||
-        (val is string && val.size() > 0 && val.size() <= 64);
-    }
-
-    function isRequiredTimestampOrIso(field) {
-      return field in request.resource.data &&
-        isValidTimestampOrIso(request.resource.data[field]);
-    }
-
-    function isNullableTimestampOrIso(field) {
-      return !(field in request.resource.data) ||
-        request.resource.data[field] == null ||
-        isValidTimestampOrIso(request.resource.data[field]);
-    }
-
-    function isNullableStringList(field, maxSize) {
-      return !(field in request.resource.data) ||
-        request.resource.data[field] == null ||
-        (request.resource.data[field] is list &&
-         request.resource.data[field].size() <= maxSize &&
-         (request.resource.data[field].size() == 0 ||
-          (request.resource.data[field][0] is string &&
-           request.resource.data[field][0].size() <= 128)));
-    }
-
-    function isIdUnchangedOnUpdate() {
-      return request.resource.data.id == resource.data.id;
+    function hasValidSubcollectionDoc(docId) {
+      return request.resource.data.id is string &&
+        request.resource.data.id == docId;
     }
 
     // ===============================================================
-    // Domain Validators
-    // ===============================================================
-
-    function isValidUserMetadata(data) {
-      return hasOnlyAllowedFields([
-          'email', 'displayName', 'uid', 'createdAt', 'migratedAt', 'updatedAt'
-        ]) &&
-        (!( 'email' in data ) || data.email == null || isValidEmail(data.email)) &&
-        isNullableString('displayName', 120) &&
-        isNullableTimestampOrIso('createdAt') &&
-        isNullableTimestampOrIso('migratedAt') &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidAccount(data) {
-      return hasOnlyAllowedFields([
-          'id', 'name', 'type', 'balance', 'creditLimit', 'annualYieldRate',
-          'savingsGoal', 'cutoffDay', 'paymentDueDay', 'manualMonthlyDueOverride',
-          'manualMonthlyDueAt', 'institution', 'colorHex', 'iconCode', 'purpose',
-          'updatedAt'
-        ]) &&
-        hasRequiredFields(['id', 'name', 'type', 'balance']) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('name', 1, 120) &&
-        data.type in ['checking', 'savings', 'yieldVault', 'investment', 'creditCard', 'cash'] &&
-        isRequiredNumber('balance') &&
-        isNullableNonNegativeNumber('creditLimit') &&
-        isNullableNumber('annualYieldRate') &&
-        isNullableNonNegativeNumber('savingsGoal') &&
-        isNullableIntInRange('cutoffDay', 1, 31) &&
-        isNullableIntInRange('paymentDueDay', 1, 31) &&
-        isNullableNonNegativeNumber('manualMonthlyDueOverride') &&
-        isNullableTimestampOrIso('manualMonthlyDueAt') &&
-        isNullableString('institution', 120) &&
-        isNullableNumber('colorHex') &&
-        isNullableNumber('iconCode') &&
-        (!( 'purpose' in data ) || data.purpose == null ||
-          data.purpose in ['general', 'debtPayment', 'fixedExpenses', 'protectedGoal']) &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidTransaction(data) {
-      return hasOnlyAllowedFields([
-          'id', 'title', 'amount', 'type', 'category', 'accountId',
-          'targetAccountId', 'date', 'billingDate', 'balanceApplied', 'note',
-          'isRecurring', 'linkedOccurrenceId', 'sourceTransactionId',
-          'savingsRuleId', 'updatedAt'
-        ]) &&
-        hasRequiredFields(['id', 'title', 'amount', 'type', 'category', 'accountId', 'date']) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('title', 1, 200) &&
-        isRequiredNonNegativeNumber('amount') &&
-        data.type in ['expense', 'income', 'transfer', 'yieldAccrual'] &&
-        isRequiredString('category', 1, 100) &&
-        isRequiredString('accountId', 1, 128) &&
-        isNullableString('targetAccountId', 128) &&
-        isRequiredTimestampOrIso('date') &&
-        isNullableTimestampOrIso('billingDate') &&
-        isNullableBool('balanceApplied') &&
-        isNullableString('note', 2000) &&
-        isNullableBool('isRecurring') &&
-        isNullableString('linkedOccurrenceId', 128) &&
-        isNullableString('sourceTransactionId', 128) &&
-        isNullableString('savingsRuleId', 128) &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidCommitment(data) {
-      return hasOnlyAllowedFields([
-          'id', 'name', 'amount', 'dueDay', 'category', 'accountId',
-          'isPaidThisMonth', 'isAutopay', 'updatedAt'
-        ]) &&
-        hasRequiredFields(['id', 'name', 'amount', 'dueDay', 'category', 'accountId']) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('name', 1, 120) &&
-        isRequiredNonNegativeNumber('amount') &&
-        isNullableIntInRange('dueDay', 1, 31) &&
-        data.dueDay is int &&
-        isRequiredString('category', 1, 100) &&
-        isRequiredString('accountId', 1, 128) &&
-        isNullableBool('isPaidThisMonth') &&
-        isNullableBool('isAutopay') &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidSavingsRule(data) {
-      return hasOnlyAllowedFields([
-          'id', 'name', 'targetAccountId', 'sourceAccountId', 'frequency',
-          'percentage', 'fixedAmount', 'isActive', 'lastTriggeredAt', 'updatedAt'
-        ]) &&
-        hasRequiredFields(['id', 'name', 'targetAccountId', 'frequency']) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('name', 1, 120) &&
-        isRequiredString('targetAccountId', 1, 128) &&
-        isNullableString('sourceAccountId', 128) &&
-        data.frequency in ['onIncome', 'daily', 'weekly', 'monthly', 'yearly'] &&
-        isNullableNonNegativeNumber('percentage') &&
-        isNullableNonNegativeNumber('fixedAmount') &&
-        isNullableBool('isActive') &&
-        isNullableTimestampOrIso('lastTriggeredAt') &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidPendingTransfer(data) {
-      return hasOnlyAllowedFields([
-          'id', 'ruleId', 'ruleName', 'sourceAccountId', 'targetAccountId',
-          'suggestedAmount', 'reason', 'createdAt', 'sourceTransactionId',
-          'updatedAt'
-        ]) &&
-        hasRequiredFields([
-          'id', 'ruleId', 'ruleName', 'sourceAccountId', 'targetAccountId',
-          'suggestedAmount', 'reason', 'createdAt'
-        ]) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('ruleId', 1, 128) &&
-        isRequiredString('ruleName', 1, 120) &&
-        isRequiredString('sourceAccountId', 1, 128) &&
-        isRequiredString('targetAccountId', 1, 128) &&
-        isRequiredNonNegativeNumber('suggestedAmount') &&
-        isRequiredString('reason', 1, 1000) &&
-        isRequiredTimestampOrIso('createdAt') &&
-        isNullableString('sourceTransactionId', 128) &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidRecurringIncome(data) {
-      return hasOnlyAllowedFields([
-          'id', 'name', 'amount', 'frequency', 'payDay', 'accountId',
-          'category', 'isActive', 'lastLoggedAt', 'updatedAt'
-        ]) &&
-        hasRequiredFields(['id', 'name', 'amount', 'frequency', 'payDay', 'accountId']) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('name', 1, 120) &&
-        isRequiredNonNegativeNumber('amount') &&
-        data.frequency in ['daily', 'weekly', 'biweekly', 'monthly', 'yearly', 'custom'] &&
-        isNullableIntInRange('payDay', 1, 31) &&
-        data.payDay is int &&
-        isRequiredString('accountId', 1, 128) &&
-        isNullableString('category', 100) &&
-        isNullableBool('isActive') &&
-        isNullableTimestampOrIso('lastLoggedAt') &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidPendingIncome(data) {
-      return hasOnlyAllowedFields([
-          'id', 'incomeId', 'name', 'accountId', 'suggestedAmount',
-          'category', 'expectedDate', 'reason', 'updatedAt'
-        ]) &&
-        hasRequiredFields([
-          'id', 'incomeId', 'name', 'accountId', 'suggestedAmount',
-          'expectedDate', 'reason'
-        ]) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('incomeId', 1, 128) &&
-        isRequiredString('name', 1, 120) &&
-        isRequiredString('accountId', 1, 128) &&
-        isRequiredNonNegativeNumber('suggestedAmount') &&
-        isNullableString('category', 100) &&
-        isRequiredTimestampOrIso('expectedDate') &&
-        isRequiredString('reason', 1, 1000) &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidPayOccurrence(data) {
-      return hasOnlyAllowedFields([
-          'id', 'incomeId', 'date', 'amount', 'status', 'note',
-          'linkedTransactionId', 'updatedAt'
-        ]) &&
-        hasRequiredFields(['id', 'incomeId', 'date', 'amount', 'status']) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('incomeId', 1, 128) &&
-        isRequiredTimestampOrIso('date') &&
-        isRequiredNonNegativeNumber('amount') &&
-        data.status in ['projected', 'confirmed', 'skipped'] &&
-        isNullableString('note', 2000) &&
-        isNullableString('linkedTransactionId', 128) &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidInstallmentPlan(data) {
-      return hasOnlyAllowedFields([
-          'id', 'accountId', 'title', 'customName', 'principalAmount',
-          'interestAmount', 'totalMonths', 'paidMonths', 'startDate', 'updatedAt'
-        ]) &&
-        hasRequiredFields([
-          'id', 'accountId', 'title', 'principalAmount', 'totalMonths', 'startDate'
-        ]) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('accountId', 1, 128) &&
-        isRequiredString('title', 1, 200) &&
-        isNullableString('customName', 200) &&
-        isRequiredNonNegativeNumber('principalAmount') &&
-        isNullableNonNegativeNumber('interestAmount') &&
-        isNullableIntInRange('totalMonths', 1, 600) &&
-        data.totalMonths is int &&
-        isNullableIntInRange('paidMonths', 0, 600) &&
-        isRequiredTimestampOrIso('startDate') &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    function isValidImportedStatement(data) {
-      return hasOnlyAllowedFields([
-          'id', 'accountId', 'fileName', 'importedAt', 'cutoffDateStr',
-          'dueDateStr', 'paymentNoInterest', 'regularBalance', 'msiBalance',
-          'totalDebt', 'creditLimit', 'importedPlanIds',
-          'importedTransactionIds', 'updatedAt'
-        ]) &&
-        hasRequiredFields(['id', 'accountId', 'fileName', 'importedAt']) &&
-        isRequiredString('id', 1, 128) &&
-        isRequiredString('accountId', 1, 128) &&
-        isRequiredString('fileName', 1, 260) &&
-        isRequiredTimestampOrIso('importedAt') &&
-        isNullableString('cutoffDateStr', 64) &&
-        isNullableString('dueDateStr', 64) &&
-        isNullableNumber('paymentNoInterest') &&
-        isNullableNumber('regularBalance') &&
-        isNullableNumber('msiBalance') &&
-        isNullableNumber('totalDebt') &&
-        isNullableNonNegativeNumber('creditLimit') &&
-        isNullableStringList('importedPlanIds', 1000) &&
-        isNullableStringList('importedTransactionIds', 1000) &&
-        isNullableTimestampOrIso('updatedAt');
-    }
-
-    // ===============================================================
-    // User Root & Subcollection Rules
+    // User-Isolated Data Rules
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isOwner(userId);
-      allow create: if isOwner(userId) &&
-        uidUnchanged() &&
-        isValidUserMetadata(request.resource.data);
-      allow update: if isOwner(userId) &&
-        uidNotModified() &&
-        (!('createdAt' in resource.data) ||
-          resource.data.createdAt == null ||
-          request.resource.data.createdAt == resource.data.createdAt) &&
-        isValidUserMetadata(request.resource.data);
-      allow delete: if isOwner(userId);
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId) &&
+        (!('uid' in request.resource.data) ||
+          request.resource.data.uid == request.auth.uid);
 
       match /accounts/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidAccount(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidAccount(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /transactions/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidTransaction(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidTransaction(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /commitments/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidCommitment(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidCommitment(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /savingsRules/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidSavingsRule(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidSavingsRule(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /pendingTransfers/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidPendingTransfer(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidPendingTransfer(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /recurringIncomes/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidRecurringIncome(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidRecurringIncome(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /pendingIncomes/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidPendingIncome(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidPendingIncome(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /payOccurrences/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidPayOccurrence(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidPayOccurrence(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /installmentPlans/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidInstallmentPlan(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidInstallmentPlan(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
 
       match /importedStatements/{docId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidImportedStatement(request.resource.data);
-        allow update: if isOwner(userId) && isIdUnchangedOnUpdate() && isValidImportedStatement(request.resource.data);
-        allow delete: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
     }
 

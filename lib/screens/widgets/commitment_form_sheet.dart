@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/budget_commitment.dart';
 import '../../providers/finance_provider.dart';
+import 'confirm_delete_dialog.dart';
 
 class CommitmentFormSheet extends StatefulWidget {
   final FinanceProvider provider;
@@ -96,7 +97,14 @@ class _CommitmentFormSheetState extends State<CommitmentFormSheet> {
 
   Future<void> _delete() async {
     if (!_isEditing) return;
-    await widget.provider.deleteCommitment(widget.existingCommitment!.id);
+    final item = widget.existingCommitment!;
+    final confirmed = await showConfirmDeleteDialog(
+      context,
+      title: '¿Eliminar gasto fijo?',
+      message: 'Se eliminará "${item.name}" del calendario y de tu proyección mensual.',
+    );
+    if (!confirmed || !mounted) return;
+    await widget.provider.deleteCommitment(item.id);
     if (mounted) Navigator.pop(context);
   }
 

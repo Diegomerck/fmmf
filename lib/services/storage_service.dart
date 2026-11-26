@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/account.dart';
 import '../models/transaction.dart';
@@ -10,6 +11,8 @@ import '../models/recurring_income.dart';
 import '../models/credit_installment.dart';
 import '../models/imported_statement.dart';
 import 'firestore_service.dart';
+
+enum CloudSyncStatus { idle, syncing, synced, error }
 
 class StorageService {
   static const String _keyAccounts = 'fmmf_accounts';
@@ -22,10 +25,16 @@ class StorageService {
   static const String _keyPayOccurrences = 'fmmf_pay_occurrences';
   static const String _keyInstallmentPlans = 'fmmf_installment_plans';
   static const String _keyImportedStatements = 'fmmf_imported_statements';
+  static const String _keyPendingCloudSync = 'fmmf_pending_cloud_sync';
 
   final SharedPreferences _prefs;
   FirestoreService? _firestore;
   String? _uid;
+  int _inFlightSyncs = 0;
+
+  final ValueNotifier<CloudSyncStatus> syncStatus =
+      ValueNotifier<CloudSyncStatus>(CloudSyncStatus.idle);
+  String? lastSyncError;
 
   StorageService(this._prefs);
 
@@ -34,14 +43,7 @@ class StorageService {
     return StorageService(prefs);
   }
 
-  /// Attaches user-scoped Cloud Firestore sync, migrating local data if cloud is empty.
-  Future<void> attachCloudSync(User user, {FirestoreService? firestore}) async {
-    _firestore = firestore ?? _firestore ?? FirestoreService();
-    _uid = user.uid;
-    await _firestore!.ensureUserProfile(user);
-    final cloud = await _firestore!.loadAll(user.uid);
-    if (cloud.isEmpty) {
-      final local = CloudSnapshot(
+  CloudSnapshot _buildLocalSnapshot() => CloudSnapshot(
         accounts: loadAccounts(),
         transactions: loadTransactions(),
         commitments: loadCommitments(),
@@ -53,17 +55,56 @@ class StorageService {
         installmentPlans: loadInstallmentPlans(),
         importedStatements: loadImportedStatements(),
       );
-      if (!local.isEmpty) {
+
+  /// Attaches user-scoped Cloud Firestore sync, migrating local or pending data if needed.
+  Future<void> attachCloudSync(User user, {FirestoreService? firestore}) async {
+    _firestore = firestore ?? _firestore ?? FirestoreService();
+    _uid = user.uid;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await _firestore!.ensureUserProfile(user);
+      final hasPendingLocal = _prefs.getBool(_keyPendingCloudSync) ?? false;
+      final cloud = await _firestore!.loadAll(user.uid);
+      final local = _buildLocalSnapshot();
+
+      if ((cloud.isEmpty || hasPendingLocal) && !local.isEmpty) {
         await _firestore!.saveAll(user.uid, local);
+        await _prefs.setBool(_keyPendingCloudSync, false);
+      } else if (!cloud.isEmpty && !hasPendingLocal) {
+        await _writeLocalOnly(cloud);
       }
-    } else {
-      await _writeLocalOnly(cloud);
+      syncStatus.value = CloudSyncStatus.synced;
+    } catch (e) {
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+      rethrow;
     }
   }
 
   void detachCloudSync() {
     _uid = null;
     _firestore?.clearSessionCache();
+    syncStatus.value = CloudSyncStatus.idle;
+    lastSyncError = null;
+  }
+
+  Future<bool> retryCloudSync() async {
+    final firestore = _firestore;
+    final uid = _uid;
+    if (firestore == null || uid == null) return false;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveAll(uid, _buildLocalSnapshot());
+      await _prefs.setBool(_keyPendingCloudSync, false);
+      syncStatus.value = CloudSyncStatus.synced;
+      return true;
+    } catch (e) {
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+      return false;
+    }
   }
 
   Future<void> _writeLocalOnly(CloudSnapshot snapshot) async {
@@ -79,16 +120,32 @@ class StorageService {
     await _prefs.setString(_keyImportedStatements, jsonEncode(snapshot.importedStatements.map((e) => e.toJson()).toList()));
   }
 
-  void _syncToCloud<T>(
+  Future<void> _syncToCloud<T>(
     String collection,
     List<T> items,
     String Function(T) idOf,
     Map<String, dynamic> Function(T) toJson,
-  ) {
+  ) async {
     final firestore = _firestore;
     final uid = _uid;
     if (firestore == null || uid == null) return;
-    unawaited(firestore.saveCollection<T>(uid, collection, items, idOf, toJson));
+
+    await _prefs.setBool(_keyPendingCloudSync, true);
+    _inFlightSyncs++;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveCollection<T>(uid, collection, items, idOf, toJson);
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      if (_inFlightSyncs == 0 && lastSyncError == null) {
+        await _prefs.setBool(_keyPendingCloudSync, false);
+        syncStatus.value = CloudSyncStatus.synced;
+      }
+    } catch (e) {
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+    }
   }
 
   // --- ACCOUNTS ---
@@ -106,7 +163,7 @@ class StorageService {
   Future<void> saveAccounts(List<Account> accounts) async {
     final raw = jsonEncode(accounts.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyAccounts, raw);
-    _syncToCloud<Account>(FirestoreService.colAccounts, accounts, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<Account>(FirestoreService.colAccounts, accounts, (e) => e.id, (e) => e.toJson());
   }
 
   // --- TRANSACTIONS ---
@@ -124,7 +181,7 @@ class StorageService {
   Future<void> saveTransactions(List<Transaction> transactions) async {
     final raw = jsonEncode(transactions.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyTransactions, raw);
-    _syncToCloud<Transaction>(FirestoreService.colTransactions, transactions, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<Transaction>(FirestoreService.colTransactions, transactions, (e) => e.id, (e) => e.toJson());
   }
 
   // --- COMMITMENTS ---
@@ -142,7 +199,7 @@ class StorageService {
   Future<void> saveCommitments(List<BudgetCommitment> commitments) async {
     final raw = jsonEncode(commitments.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyCommitments, raw);
-    _syncToCloud<BudgetCommitment>(FirestoreService.colCommitments, commitments, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<BudgetCommitment>(FirestoreService.colCommitments, commitments, (e) => e.id, (e) => e.toJson());
   }
 
   // --- SAVINGS RULES ---
@@ -160,7 +217,7 @@ class StorageService {
   Future<void> saveSavingsRules(List<SavingsRule> rules) async {
     final raw = jsonEncode(rules.map((e) => e.toJson()).toList());
     await _prefs.setString(_keySavingsRules, raw);
-    _syncToCloud<SavingsRule>(FirestoreService.colSavingsRules, rules, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<SavingsRule>(FirestoreService.colSavingsRules, rules, (e) => e.id, (e) => e.toJson());
   }
 
   // --- PENDING TRANSFERS ---
@@ -178,7 +235,7 @@ class StorageService {
   Future<void> savePendingTransfers(List<PendingTransfer> transfers) async {
     final raw = jsonEncode(transfers.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyPendingTransfers, raw);
-    _syncToCloud<PendingTransfer>(FirestoreService.colPendingTransfers, transfers, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<PendingTransfer>(FirestoreService.colPendingTransfers, transfers, (e) => e.id, (e) => e.toJson());
   }
 
   // --- RECURRING INCOMES ---
@@ -196,7 +253,7 @@ class StorageService {
   Future<void> saveRecurringIncomes(List<RecurringIncome> incomes) async {
     final raw = jsonEncode(incomes.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyRecurringIncomes, raw);
-    _syncToCloud<RecurringIncome>(FirestoreService.colRecurringIncomes, incomes, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<RecurringIncome>(FirestoreService.colRecurringIncomes, incomes, (e) => e.id, (e) => e.toJson());
   }
 
   // --- PENDING INCOMES ---
@@ -214,7 +271,7 @@ class StorageService {
   Future<void> savePendingIncomes(List<PendingIncome> pending) async {
     final raw = jsonEncode(pending.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyPendingIncomes, raw);
-    _syncToCloud<PendingIncome>(FirestoreService.colPendingIncomes, pending, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<PendingIncome>(FirestoreService.colPendingIncomes, pending, (e) => e.id, (e) => e.toJson());
   }
 
   // --- SCHEDULED PAY OCCURRENCES ---
@@ -232,7 +289,7 @@ class StorageService {
   Future<void> savePayOccurrences(List<ScheduledPayOccurrence> occurrences) async {
     final raw = jsonEncode(occurrences.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyPayOccurrences, raw);
-    _syncToCloud<ScheduledPayOccurrence>(FirestoreService.colPayOccurrences, occurrences, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<ScheduledPayOccurrence>(FirestoreService.colPayOccurrences, occurrences, (e) => e.id, (e) => e.toJson());
   }
 
   // --- CREDIT INSTALLMENT PLANS (MSI / MCI) ---
@@ -250,7 +307,7 @@ class StorageService {
   Future<void> saveInstallmentPlans(List<CreditInstallmentPlan> plans) async {
     final raw = jsonEncode(plans.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyInstallmentPlans, raw);
-    _syncToCloud<CreditInstallmentPlan>(FirestoreService.colInstallmentPlans, plans, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<CreditInstallmentPlan>(FirestoreService.colInstallmentPlans, plans, (e) => e.id, (e) => e.toJson());
   }
 
   // --- IMPORTED STATEMENTS ---
@@ -268,7 +325,7 @@ class StorageService {
   Future<void> saveImportedStatements(List<ImportedStatement> statements) async {
     final raw = jsonEncode(statements.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyImportedStatements, raw);
-    _syncToCloud<ImportedStatement>(FirestoreService.colImportedStatements, statements, (e) => e.id, (e) => e.toJson());
+    await _syncToCloud<ImportedStatement>(FirestoreService.colImportedStatements, statements, (e) => e.id, (e) => e.toJson());
   }
 
   Future<void> clearAllData() async {
@@ -336,16 +393,24 @@ class StorageService {
           .map((e) => ImportedStatement.fromJson(e as Map<String, dynamic>))
           .toList();
 
-      await saveAccounts(accounts);
-      await saveTransactions(transactions);
-      await saveCommitments(commitments);
-      await saveSavingsRules(savingsRules);
-      await savePendingTransfers(pendingTransfers);
-      await saveRecurringIncomes(recurringIncomes);
-      await savePendingIncomes(pendingIncomes);
-      await savePayOccurrences(payOccurrences);
-      await saveInstallmentPlans(installmentPlans);
-      await saveImportedStatements(importedStatements);
+      final snapshot = CloudSnapshot(
+        accounts: accounts,
+        transactions: transactions,
+        commitments: commitments,
+        savingsRules: savingsRules,
+        pendingTransfers: pendingTransfers,
+        recurringIncomes: recurringIncomes,
+        pendingIncomes: pendingIncomes,
+        payOccurrences: payOccurrences,
+        installmentPlans: installmentPlans,
+        importedStatements: importedStatements,
+      );
+
+      await _writeLocalOnly(snapshot);
+      if (_firestore != null && _uid != null) {
+        await _prefs.setBool(_keyPendingCloudSync, true);
+        await retryCloudSync();
+      }
       return true;
     } catch (_) {
       return false;

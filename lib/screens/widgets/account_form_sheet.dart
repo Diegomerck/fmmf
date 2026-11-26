@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/account.dart';
 import '../../providers/finance_provider.dart';
+import 'confirm_delete_dialog.dart';
 
 class AccountFormSheet extends StatefulWidget {
   final FinanceProvider provider;
@@ -207,7 +208,15 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
 
   Future<void> _delete() async {
     if (!_isEditing) return;
-    await widget.provider.deleteAccount(widget.existingAccount!.id);
+    final acc = widget.existingAccount!;
+    final confirmed = await showConfirmDeleteDialog(
+      context,
+      title: '¿Eliminar cuenta?',
+      message:
+          'Se eliminará "${acc.name}". Asegúrate de no necesitar su historial ni reglas vinculadas.',
+    );
+    if (!confirmed || !mounted) return;
+    await widget.provider.deleteAccount(acc.id);
     if (mounted) Navigator.pop(context);
   }
 

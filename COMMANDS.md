@@ -21,7 +21,7 @@ Practical command and workflow reference for **FMMF** (`Flutter 3.24.5` / `Dart 
 
 ## 2. Release Workflows
 
-> **Current Status:** GitHub remote and Firebase Hosting are **TBD (to be configured)** once the core app features are finalized.
+> **Current Status:** GitHub remote (`Diegomerck/fmmf`) and Firebase (`fmmf-finance`: Hosting, Auth, Firestore) are active.
 
 ### `PUSH TO LIVE` (Public Release)
 1. Bump `version:` in `pubspec.yaml`.

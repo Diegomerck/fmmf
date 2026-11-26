@@ -3,6 +3,7 @@ import '../../core/theme/app_theme.dart';
 import '../../models/account.dart';
 import '../../models/recurring_income.dart';
 import '../../providers/finance_provider.dart';
+import 'confirm_delete_dialog.dart';
 
 class RecurringIncomeSheet extends StatefulWidget {
   final FinanceProvider provider;
@@ -154,7 +155,15 @@ class _RecurringIncomeSheetState extends State<RecurringIncomeSheet> {
 
   Future<void> _delete() async {
     if (!_isEditing) return;
-    await widget.provider.deleteRecurringIncome(widget.existingIncome!.id);
+    final inc = widget.existingIncome!;
+    final confirmed = await showConfirmDeleteDialog(
+      context,
+      title: '¿Eliminar ingreso recurrente?',
+      message:
+          'Se eliminará "${inc.name}" junto con sus próximos cobros programados.',
+    );
+    if (!confirmed || !mounted) return;
+    await widget.provider.deleteRecurringIncome(inc.id);
     if (mounted) Navigator.pop(context);
   }
 

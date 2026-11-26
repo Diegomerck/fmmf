@@ -4,6 +4,7 @@ import '../../core/utils/currency_format.dart';
 import '../../models/account.dart';
 import '../../models/credit_installment.dart';
 import '../../providers/finance_provider.dart';
+import 'confirm_delete_dialog.dart';
 
 class InstallmentPlanSheet extends StatefulWidget {
   final FinanceProvider provider;
@@ -111,7 +112,15 @@ class _InstallmentPlanSheetState extends State<InstallmentPlanSheet> {
 
   Future<void> _delete() async {
     if (!_isEditing) return;
-    await widget.provider.deleteInstallmentPlan(widget.existingPlan!.id);
+    final plan = widget.existingPlan!;
+    final confirmed = await showConfirmDeleteDialog(
+      context,
+      title: '¿Eliminar plan MSI / MCI?',
+      message:
+          'Se eliminará "${plan.title}" (${plan.remainingMonths} mensualidades restantes).',
+    );
+    if (!confirmed || !mounted) return;
+    await widget.provider.deleteInstallmentPlan(plan.id);
     if (mounted) Navigator.pop(context);
   }
 

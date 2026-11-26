@@ -47,18 +47,23 @@ lib/
 │   ├── budget_commitment.dart      # Fixed monthly bills (Rent, Subscriptions, Gym)
 │   └── financial_insight.dart      # Advisor alerts and opportunity metrics
 ├── services/
-│   ├── storage_service.dart        # Local persistence & seed data (ready for Firebase)
-│   └── advisor_engine.dart         # Calculation engine for Safe-to-Spend, Yields & Insights
+│   ├── auth_service.dart           # Firebase Authentication (Email/Password & Google Sign-In)
+│   ├── firestore_service.dart      # User-scoped Cloud Firestore persistence (users/{uid})
+│   ├── storage_service.dart        # Local SharedPreferences cache + awaited Firestore sync
+│   └── advisor_engine.dart         # Calculation engine for Safe-to-Spend, 12M forecast & insights
 ├── providers/
 │   └── finance_provider.dart       # Central state management & smart natural parser
 └── screens/
-    ├── home_screen.dart            # Bottom bar navigation & quick action triggers
-    ├── dashboard_tab.dart          # Hero Safe-to-Spend & financial overview
+    ├── auth_screen.dart            # Email/Password & Google Sign-In screen
+    ├── home_screen.dart            # Bottom bar navigation, live sync status & quick action
+    ├── dashboard_tab.dart          # Hero Safe-to-Spend & monthly cashflow breakdown
     ├── transactions_tab.dart       # Searchable & filterable movement ledger
-    ├── yields_tab.dart             # Passive earnings & Lazy Money detector
-    ├── accounts_tab.dart           # Balance breakdown, debt limits, and cutoff dates
-    ├── advisor_tab.dart            # Super Advisor diagnostic & health metrics
+    ├── accounts_tab.dart           # Balance breakdown, account purpose, limits & cutoffs
+    ├── plan_tab.dart               # Income schedule, savings rules, fixed bills & 12M forecast
+    ├── settings_tab.dart           # Account session, JSON backup/restore & Danger Zone
     └── widgets/
+        ├── confirm_delete_dialog.dart
+        ├── expandable_breakdown_row.dart
         ├── quick_entry_sheet.dart  # Smart one-line natural text parser & modal
         └── safe_to_spend_card.dart # Flagship financial health hero card
 ```
@@ -88,3 +93,14 @@ flutter build appbundle --release
 ```bash
 flutter build ipa
 ```
+
+---
+
+## 📋 Notas de la Versión (Changelog)
+
+### v1.1.0+2
+- **Sincronización en la nube con Firebase:** Inicio de sesión con correo/contraseña y Google, respaldo automático en Cloud Firestore aislado por usuario y migración automática de datos locales.
+- **Indicador de sincronización en vivo:** Estado en barra superior y pestaña de Ajustes con opción de reintento inmediato.
+- **Nueva pestaña de Ajustes:** Gestión de sesión, asistente de configuración, exportación/importación JSON y **Zona de Peligro** protegida con confirmación escrita (`BORRAR`) para evitar borrados accidentales.
+- **Confirmaciones en acciones destructivas:** Diálogos de confirmación al eliminar movimientos, cuentas, gastos fijos, ingresos recurrentes, reglas de ahorro y planes MSI/MCI.
+- **Proyección a 12 meses y pagos domiciliados:** Planeación mensual con desglose expandible, propósito de cuentas de ahorro y sugerencias inteligentes para cubrir el mes.

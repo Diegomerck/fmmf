@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
-import '../core/utils/file_backup_helper.dart';
 import '../providers/finance_provider.dart';
+import '../services/storage_service.dart';
 import 'accounts_tab.dart';
 import 'dashboard_tab.dart';
 import 'plan_tab.dart';
+import 'settings_tab.dart';
 import 'setup_wizard_screen.dart';
 import 'transactions_tab.dart';
 import 'widgets/quick_entry_sheet.dart';
@@ -51,6 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'Movimientos',
       'Cuentas',
       'Plan y Asesor',
+      'Ajustes',
     ];
 
     return ListenableBuilder(
@@ -64,6 +66,12 @@ class _HomeScreenState extends State<HomeScreen> {
           TransactionsTab(provider: widget.provider),
           AccountsTab(provider: widget.provider),
           PlanTab(provider: widget.provider),
+          SettingsTab(
+            provider: widget.provider,
+            userEmail: widget.userEmail,
+            onOpenSetupWizard: () => setState(() => _showSetupWizard = true),
+            onSignOut: widget.onSignOut,
+          ),
         ];
 
         return Scaffold(
@@ -95,6 +103,62 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             actions: [
+              ValueListenableBuilder<CloudSyncStatus>(
+                valueListenable: widget.provider.syncStatus,
+                builder: (context, status, _) {
+                  switch (status) {
+                    case CloudSyncStatus.syncing:
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 10),
+                        child: Center(
+                          child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppTheme.electricCyan,
+                            ),
+                          ),
+                        ),
+                      );
+                    case CloudSyncStatus.error:
+                      return IconButton(
+                        icon: const Icon(Icons.cloud_off_outlined,
+                            color: AppTheme.alertCoral),
+                        tooltip: 'Error de sincronización (toca para reintentar)',
+                        onPressed: () async {
+                          final ok = await widget.provider.retryCloudSync();
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                backgroundColor: ok
+                                    ? AppTheme.emeraldGreen
+                                    : AppTheme.alertCoral,
+                                content: Text(
+                                  ok
+                                      ? 'Datos sincronizados con la nube.'
+                                      : 'No se pudo sincronizar: ${widget.provider.lastSyncError ?? ''}',
+                                ),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        },
+                      );
+                    case CloudSyncStatus.synced:
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 8),
+                        child: Tooltip(
+                          message: 'Sincronizado en la nube',
+                          child: Icon(Icons.cloud_done_outlined,
+                              size: 20, color: AppTheme.emeraldGreen),
+                        ),
+                      );
+                    case CloudSyncStatus.idle:
+                      return const SizedBox.shrink();
+                  }
+                },
+              ),
               IconButton(
                 icon: const Icon(Icons.bolt, color: AppTheme.emeraldGreen),
                 tooltip: 'Nuevo Movimiento',
@@ -106,190 +170,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     builder: (_) => QuickEntrySheet(provider: widget.provider),
                   );
                 },
-              ),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
-                color: AppTheme.card,
-                onSelected: (value) async {
-                  if (value == 'wizard') {
-                    setState(() => _showSetupWizard = true);
-                  } else if (value == 'export') {
-                    final jsonStr = widget.provider.exportBackupJson();
-                    final now = DateTime.now();
-                    final dateTag =
-                        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-                    await downloadJsonFile('fmmf_respaldo_$dateTag.json', jsonStr);
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          backgroundColor: AppTheme.emeraldGreen,
-                          content: Text('Archivo descargado: fmmf_respaldo_$dateTag.json'),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    }
-                  } else if (value == 'import') {
-                    final pickedContent = await pickJsonFileContent();
-                    if (pickedContent != null) {
-                      final ok = await widget.provider.importBackupJson(pickedContent.trim());
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            backgroundColor: ok ? AppTheme.emeraldGreen : AppTheme.alertCoral,
-                            content: Text(ok ? 'Respaldo importado correctamente.' : 'Archivo JSON inválido.'),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      }
-                    } else if (context.mounted) {
-                      final ctrl = TextEditingController();
-                      showDialog(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          backgroundColor: AppTheme.card,
-                          title: const Text('Importar Respaldo (JSON)', style: TextStyle(color: Colors.white, fontSize: 16)),
-                          content: TextField(
-                            controller: ctrl,
-                            maxLines: 6,
-                            style: const TextStyle(fontSize: 12, color: Colors.white),
-                            decoration: InputDecoration(
-                              hintText: 'Pega aquí el JSON exportado...',
-                              hintStyle: const TextStyle(color: AppTheme.textMuted),
-                              filled: true,
-                              fillColor: AppTheme.surface,
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx),
-                              child: const Text('Cancelar', style: TextStyle(color: AppTheme.textSecondary)),
-                            ),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.emeraldGreen, foregroundColor: Colors.white),
-                              onPressed: () async {
-                                final ok = await widget.provider.importBackupJson(ctrl.text.trim());
-                                if (ctx.mounted) Navigator.pop(ctx);
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      backgroundColor: ok ? AppTheme.emeraldGreen : AppTheme.alertCoral,
-                                      content: Text(ok ? 'Respaldo restaurado correctamente.' : 'JSON inválido. Verifica el respaldo.'),
-                                      behavior: SnackBarBehavior.floating,
-                                    ),
-                                  );
-                                }
-                              },
-                              child: const Text('Restaurar'),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                  } else if (value == 'clear') {
-                    if (!context.mounted) return;
-                    showDialog(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        backgroundColor: AppTheme.card,
-                        title: const Text('¿Borrar todos los datos?', style: TextStyle(color: Colors.white, fontSize: 16)),
-                        content: const Text(
-                          'Se eliminarán todas tus cuentas, movimientos, reglas de ahorro y calendario. Esta acción no se puede deshacer.',
-                          style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx),
-                            child: const Text('Cancelar', style: TextStyle(color: AppTheme.textSecondary)),
-                          ),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.alertCoral, foregroundColor: Colors.white),
-                            onPressed: () async {
-                              await widget.provider.clearAllData();
-                              if (ctx.mounted) Navigator.pop(ctx);
-                              if (mounted) {
-                                setState(() => _showSetupWizard = true);
-                              }
-                            },
-                            child: const Text('Sí, borrar todo'),
-                          ),
-                        ],
-                      ),
-                    );
-                  } else if (value == 'logout' && widget.onSignOut != null) {
-                    await widget.onSignOut!();
-                  }
-                },
-                itemBuilder: (context) => [
-                  if (widget.userEmail != null)
-                    PopupMenuItem(
-                      enabled: false,
-                      child: Row(
-                        children: [
-                          const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.emeraldGreen),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              widget.userEmail!,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  const PopupMenuItem(
-                    value: 'wizard',
-                    child: Row(
-                      children: [
-                        Icon(Icons.auto_fix_high, size: 18, color: AppTheme.amberGold),
-                        SizedBox(width: 8),
-                        Text('Asistente de Configuración', style: TextStyle(color: Colors.white, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'export',
-                    child: Row(
-                      children: [
-                        Icon(Icons.download_outlined, size: 18, color: AppTheme.electricCyan),
-                        SizedBox(width: 8),
-                        Text('Exportar Respaldo (JSON)', style: TextStyle(color: Colors.white, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'import',
-                    child: Row(
-                      children: [
-                        Icon(Icons.upload_outlined, size: 18, color: AppTheme.emeraldGreen),
-                        SizedBox(width: 8),
-                        Text('Importar Respaldo (JSON)', style: TextStyle(color: Colors.white, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'clear',
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_forever_outlined, size: 18, color: AppTheme.alertCoral),
-                        SizedBox(width: 8),
-                        Text('Borrar Todos los Datos', style: TextStyle(color: Colors.white, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  if (widget.onSignOut != null)
-                    const PopupMenuItem(
-                      value: 'logout',
-                      child: Row(
-                        children: [
-                          Icon(Icons.logout, size: 18, color: AppTheme.textSecondary),
-                          SizedBox(width: 8),
-                          Text('Cerrar Sesión', style: TextStyle(color: Colors.white, fontSize: 13)),
-                        ],
-                      ),
-                    ),
-                ],
               ),
             ],
           ),
@@ -328,6 +208,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: Icon(Icons.event_note_outlined),
                   activeIcon: Icon(Icons.event_note),
                   label: 'Plan',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.settings_outlined),
+                  activeIcon: Icon(Icons.settings),
+                  label: 'Ajustes',
                 ),
               ],
             ),

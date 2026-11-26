@@ -4,6 +4,7 @@ import '../../core/utils/currency_format.dart';
 import '../../models/account.dart';
 import '../../models/transaction.dart';
 import '../../providers/finance_provider.dart';
+import 'widgets/confirm_delete_dialog.dart';
 import 'widgets/pending_incomes_section.dart';
 
 enum _MovementsViewMode { chronological, byAccount, entryOrder }
@@ -175,7 +176,17 @@ class _TransactionsTabState extends State<TransactionsTab> {
                         minHeight: isCompact ? 26 : 36,
                       ),
                       tooltip: 'Eliminar movimiento',
-                      onPressed: () => widget.provider.deleteTransaction(tx.id),
+                      onPressed: () async {
+                        final confirmed = await showConfirmDeleteDialog(
+                          context,
+                          title: '¿Eliminar movimiento?',
+                          message:
+                              'Se eliminará "${tx.title}" (${CurrencyFormat.formatMXN(tx.amount)}) y se revertirá su efecto en el saldo de la cuenta.',
+                        );
+                        if (confirmed) {
+                          await widget.provider.deleteTransaction(tx.id);
+                        }
+                      },
                     ),
                   ],
                 ),

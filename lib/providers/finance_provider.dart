@@ -1288,6 +1288,10 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   // --- BACKUP & RESET ---
+  ValueNotifier<CloudSyncStatus> get syncStatus => _storage.syncStatus;
+  String? get lastSyncError => _storage.lastSyncError;
+  Future<bool> retryCloudSync() => _storage.retryCloudSync();
+
   String exportBackupJson() => _storage.exportBackupJson();
 
   Future<bool> importBackupJson(String rawJson) async {
