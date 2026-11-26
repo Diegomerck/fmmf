@@ -1,0 +1,35 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "auth": {
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "FMMF",
+        "supportEmail": "diegoamercadoa@gmail.com",
+        "authorizedRedirectUris": [
+          "https://fmmf-finance.firebaseapp.com/__/auth/handler",
+          "https://fmmf-finance.web.app/__/auth/handler",
+          "http://localhost"
+        ]
+      }
+    }
+  }
+}
+
