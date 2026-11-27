@@ -182,6 +182,7 @@ class AdvisorEngine {
     List<RecurringIncome> recurringIncomes = const [],
     List<ScheduledPayOccurrence> scheduledOccurrences = const [],
     List<String> fundingPriorityIds = const [],
+    Set<String> importedTransactionIds = const {},
     int emergencyFundMonths = 3,
     bool emergencyFundEnabled = true,
     double safetyCushion = 0.0, // Optional reserve cushion in MXN (0 by default)
@@ -294,6 +295,7 @@ class AdvisorEngine {
           if (!t.date.isAfter(overrideAt)) continue;
           if (t.type == MovementType.expense &&
               t.accountId == card.id &&
+              !importedTransactionIds.contains(t.id) &&
               t.category != 'Estado de Cuenta' &&
               t.category != 'Compras a Meses') {
             delta += t.amount;

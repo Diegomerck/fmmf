@@ -4,10 +4,14 @@ import '../../core/utils/currency_format.dart';
 import '../../models/account.dart';
 import '../../models/transaction.dart';
 import '../../providers/finance_provider.dart';
+import 'category_analytics_screen.dart';
+import 'statement_categorizer_screen.dart';
 import 'widgets/confirm_delete_dialog.dart';
 import 'widgets/pending_incomes_section.dart';
 
-enum _MovementsViewMode { chronological, byAccount, entryOrder }
+enum _MovementsViewMode { chronological, byAccount, byCategory, entryOrder }
+
+enum _CategoryRange { thisMonth, threeMonths, thisYear, allTime }
 
 class TransactionsTab extends StatefulWidget {
   final FinanceProvider provider;
@@ -22,6 +26,7 @@ class _TransactionsTabState extends State<TransactionsTab> {
   String _filter = 'Todos'; // 'Todos', 'Gastos', 'Ingresos', 'Transferencias', 'Rendimientos'
   String? _selectedAccountId;
   _MovementsViewMode _viewMode = _MovementsViewMode.chronological;
+  _CategoryRange _categoryRange = _CategoryRange.thisMonth;
   String _searchQuery = '';
 
   IconData _accountIcon(AccountType? type) {
@@ -280,6 +285,8 @@ class _TransactionsTabState extends State<TransactionsTab> {
                 const SizedBox(width: 6),
                 _viewChip('Por Cuenta', Icons.account_balance_wallet_outlined, _MovementsViewMode.byAccount, isCompact: isCompact),
                 const SizedBox(width: 6),
+                _viewChip('Por Categoría', Icons.pie_chart_outline, _MovementsViewMode.byCategory, isCompact: isCompact),
+                const SizedBox(width: 6),
                 _viewChip('Registro', Icons.history, _MovementsViewMode.entryOrder, isCompact: isCompact),
                 const SizedBox(width: 10),
                 Container(width: 1, height: 20, color: AppTheme.border),
@@ -363,16 +370,36 @@ class _TransactionsTabState extends State<TransactionsTab> {
           ],
           SizedBox(height: isCompact ? 8 : 12),
 
+          if (_viewMode == _MovementsViewMode.byCategory) ...[
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _rangeChip('Este mes', _CategoryRange.thisMonth, isCompact),
+                  const SizedBox(width: 6),
+                  _rangeChip('3 meses', _CategoryRange.threeMonths, isCompact),
+                  const SizedBox(width: 6),
+                  _rangeChip('Este año', _CategoryRange.thisYear, isCompact),
+                  const SizedBox(width: 6),
+                  _rangeChip('Todo', _CategoryRange.allTime, isCompact),
+                ],
+              ),
+            ),
+            SizedBox(height: isCompact ? 8 : 10),
+          ],
+
           // Pending Incomes to Confirm
           PendingIncomesSection(provider: widget.provider),
 
           // Transactions List
           Expanded(
-            child: filtered.isEmpty
-                ? const Center(
-                    child: Text('No hay movimientos que coincidan.', style: TextStyle(color: AppTheme.textMuted)),
-                  )
-                : _viewMode == _MovementsViewMode.byAccount
+            child: _viewMode == _MovementsViewMode.byCategory
+                ? _buildCategoryBreakdownList(filtered, isCompact)
+                : filtered.isEmpty
+                    ? const Center(
+                        child: Text('No hay movimientos que coincidan.', style: TextStyle(color: AppTheme.textMuted)),
+                      )
+                    : _viewMode == _MovementsViewMode.byAccount
                     ? ListView(
                         padding: const EdgeInsets.only(bottom: 76),
                         children: byAccountGroups.entries.map((entry) {
@@ -446,7 +473,320 @@ class _TransactionsTabState extends State<TransactionsTab> {
         fontSize: isCompact ? 11 : 11.5,
         fontWeight: isSelected ? FontWeight.w700 : FontWeight.normal,
       ),
-      onSelected: (_) => setState(() => _viewMode = mode),
+      onSelected: (_) => setState(() {
+        _viewMode = mode;
+        if (mode == _MovementsViewMode.byCategory && _filter == 'Todos') {
+          _filter = 'Gastos';
+        }
+      }),
+    );
+  }
+
+  Widget _rangeChip(String label, _CategoryRange range, bool isCompact) {
+    final selected = _categoryRange == range;
+    return ChoiceChip(
+      visualDensity: isCompact ? VisualDensity.compact : VisualDensity.standard,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      label: Text(label),
+      selected: selected,
+      selectedColor: AppTheme.emeraldGreen.withOpacity(0.25),
+      backgroundColor: AppTheme.card,
+      labelStyle: TextStyle(
+        color: selected ? Colors.white : AppTheme.textSecondary,
+        fontSize: isCompact ? 10.5 : 11,
+        fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
+      ),
+      onSelected: (_) => setState(() => _categoryRange = range),
+    );
+  }
+
+  Widget _buildCategoryBreakdownList(List<Transaction> baseFiltered, bool isCompact) {
+    final now = DateTime.now();
+    final monthStart = DateTime(now.year, now.month, 1);
+    final prevMonthStart = DateTime(now.year, now.month - 1, 1);
+    final threeMonthsStart = DateTime(now.year, now.month - 2, 1);
+    final yearStart = DateTime(now.year, 1, 1);
+
+    final inRange = baseFiltered.where((tx) {
+      return switch (_categoryRange) {
+        _CategoryRange.thisMonth => !tx.date.isBefore(monthStart),
+        _CategoryRange.threeMonths => !tx.date.isBefore(threeMonthsStart),
+        _CategoryRange.thisYear => !tx.date.isBefore(yearStart),
+        _CategoryRange.allTime => true,
+      };
+    }).toList();
+
+    if (inRange.isEmpty) {
+      return const Center(
+        child: Text(
+          'No hay movimientos en este rango para agrupar por categoría.',
+          style: TextStyle(color: AppTheme.textMuted),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    final Map<String, List<Transaction>> byCat = {};
+    for (final tx in inRange) {
+      byCat.putIfAbsent(tx.category, () => []).add(tx);
+    }
+
+    // Previous month totals for delta comparison when viewing "Este mes"
+    final Map<String, double> prevMonthByCat = {};
+    if (_categoryRange == _CategoryRange.thisMonth) {
+      for (final tx in baseFiltered) {
+        if (!tx.date.isBefore(prevMonthStart) && tx.date.isBefore(monthStart)) {
+          prevMonthByCat[tx.category] =
+              (prevMonthByCat[tx.category] ?? 0.0) + tx.amount;
+        }
+      }
+    }
+
+    final double grandTotal =
+        inRange.fold<double>(0.0, (s, tx) => s + tx.amount);
+
+    final sortedEntries = byCat.entries.toList()
+      ..sort((a, b) {
+        final aSum = a.value.fold<double>(0.0, (s, t) => s + t.amount);
+        final bSum = b.value.fold<double>(0.0, (s, t) => s + t.amount);
+        return bSum.compareTo(aSum);
+      });
+
+    final MovementType? typeFilter = switch (_filter) {
+      'Gastos' => MovementType.expense,
+      'Ingresos' => MovementType.income,
+      'Transferencias' => MovementType.transfer,
+      'Rendimientos' => MovementType.yieldAccrual,
+      _ => null,
+    };
+
+    final uncategorizedCount = widget.provider.transactions
+        .where((t) =>
+            t.type == MovementType.expense &&
+            (t.category == 'Estado de Cuenta' || t.category == 'Varios'))
+        .length;
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 76),
+      children: [
+        if (uncategorizedCount > 0)
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.electricCyan.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppTheme.electricCyan.withOpacity(0.4)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.auto_fix_high,
+                    size: 20, color: AppTheme.electricCyan),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$uncategorizedCount cargos por clasificar',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Text(
+                        'Auto-clasifica comercios conocidos o agrupa los restantes en 1 toque.',
+                        style: TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.electricCyan,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => StatementCategorizerScreen(
+                          provider: widget.provider,
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text(
+                    'Clasificar',
+                    style:
+                        TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '${sortedEntries.length} categorías • ${inRange.length} mov.',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              Text(
+                'Total: ${CurrencyFormat.formatMXN(grandTotal)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ),
+        ...sortedEntries.map((entry) {
+          final catName = entry.key;
+          final list = entry.value;
+          final total = list.fold<double>(0.0, (s, t) => s + t.amount);
+          final share = grandTotal > 0 ? total / grandTotal : 0.0;
+          final avg = list.isEmpty ? 0.0 : total / list.length;
+          final catMeta = widget.provider.categoryByName(
+            catName,
+            isIncome: _filter == 'Ingresos' ? true : (_filter == 'Gastos' ? false : null),
+          );
+          final color = catMeta?.color ?? AppTheme.electricCyan;
+          final icon = catMeta?.iconData ?? Icons.category_outlined;
+
+          String? deltaText;
+          Color deltaColor = AppTheme.textMuted;
+          if (_categoryRange == _CategoryRange.thisMonth) {
+            final prev = prevMonthByCat[catName] ?? 0.0;
+            if (prev > 0) {
+              final pct = ((total - prev) / prev) * 100.0;
+              final sign = pct >= 0 ? '+' : '';
+              deltaText = '$sign${pct.toStringAsFixed(0)}% vs mes ant.';
+              deltaColor = pct > 5
+                  ? AppTheme.alertCoral
+                  : (pct < -5 ? AppTheme.emeraldGreen : AppTheme.textSecondary);
+            }
+          }
+
+          return InkWell(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CategoryAnalyticsScreen(
+                    provider: widget.provider,
+                    categoryName: catName,
+                    movementTypeFilter: typeFilter,
+                  ),
+                ),
+              );
+            },
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              margin: EdgeInsets.only(bottom: isCompact ? 8 : 10),
+              padding: EdgeInsets.all(isCompact ? 11 : 13),
+              decoration: BoxDecoration(
+                color: AppTheme.card,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: color.withOpacity(0.35)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: isCompact ? 15 : 17,
+                        backgroundColor: color.withOpacity(0.18),
+                        child: Icon(icon, size: isCompact ? 16 : 18, color: color),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              catName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              '${list.length} mov. • Prom: ${CurrencyFormat.formatMXN(avg, includeDecimals: false)}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppTheme.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            CurrencyFormat.formatMXN(total),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          Text(
+                            '${(share * 100).toStringAsFixed(1)}%${deltaText != null ? " • $deltaText" : ""}',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                              color: deltaText != null ? deltaColor : color,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: share.clamp(0.0, 1.0),
+                      minHeight: 5,
+                      backgroundColor: AppTheme.surface,
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
     );
   }
 }

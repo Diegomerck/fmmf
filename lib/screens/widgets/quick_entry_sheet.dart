@@ -124,13 +124,6 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
     if (mounted) {
       if (success) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: AppTheme.emeraldGreen,
-            content: Text('Movimiento registrado: "$text"'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -242,9 +235,8 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
       );
     }
 
-    List<String> learnedKeywords = const [];
     if (_selectedType != MovementType.transfer) {
-      learnedKeywords = await widget.provider.recordCategoryUsageAndAutoLearn(
+      await widget.provider.recordCategoryUsageAndAutoLearn(
         description: title,
         categoryName: _selectedCategory,
         isIncome: _selectedType == MovementType.income,
@@ -253,16 +245,6 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
 
     if (mounted) {
       Navigator.pop(context);
-      final learnedMsg = learnedKeywords.isNotEmpty
-          ? ' • Auto-aprendido: ${learnedKeywords.map((w) => '"$w"').join(", ")} → $_selectedCategory'
-          : '';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppTheme.emeraldGreen,
-          content: Text('Registrado: $title (\$$amount MXN)$learnedMsg'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
     }
   }
 

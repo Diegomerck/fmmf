@@ -256,13 +256,6 @@ class SafeToSpendCard extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.bolt, color: AppTheme.emeraldGreen, size: 22),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                tooltip: 'Registro Rápido',
-                onPressed: onQuickAdd,
-              ),
             ],
           ),
           const SizedBox(height: 8),

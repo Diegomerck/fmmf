@@ -98,6 +98,11 @@ flutter build ipa
 
 ## 📋 Notas de la Versión (Changelog)
 
+### v3.1.0+5
+- **Analítica por Categoría (`Movimientos → Por Categoría`):** Nueva vista agrupada por categoría con filtro temporal (*Este mes*, *3 meses*, *Este año*, *Todo*), porcentaje del gasto, comparativa contra el mes anterior y pantalla de detalle (`CategoryAnalyticsScreen`) con gráfica mensual interactiva (6M/12M), mes pico, conceptos más frecuentes y edición directa de cualquier movimiento.
+- **Auto-clasificación de Estados de Cuenta y Clasificador Agrupado:** Los estados de cuenta ahora detectan automáticamente comercios conocidos desde la importación; además, `Clasificar Cargos Importados` agrupa comercios repetidos para clasificarlos en 1 toque, permite elegir o editar la palabra clave exacta (o marcar *"No aplica ninguna palabra clave para este cargo"*), crear categorías nuevas al instante y corregir con un toque.
+- **Interfaz más limpia:** Indicador de sincronización en la nube (`CloudSyncBadge`) en la esquina superior derecha sin notificaciones SnackBar invasivas, selector de categoría dentro de `Editar Cargo` en tarjetas y botón `+` visible únicamente en `Resumen` y `Movimientos`.
+
 ### v3.0.0+4
 - **Prioridad de Metas del Excedente (`Ajustes → Prioridad de Metas`):** Configura el orden de tus metas para tu dinero libre (*Fondo de Emergencia*, *Invertir y Crecer*, *Abono Extra a Tarjetas* opcional) y activa o desactiva el Fondo de Emergencia sin asumir pagos extra a tarjetas por defecto.
 - **Categorías Inteligentes (Gasto / Ingreso / Ambos + Palabras Clave):** Las categorías ahora pueden usarse en Gastos, Ingresos o Ambos, permiten configurar palabras clave editables en `Ajustes → Categorías de Movimientos`, y aprenden automáticamente al 3er uso para preseleccionar la categoría mientras escribes.

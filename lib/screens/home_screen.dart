@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
 import '../providers/finance_provider.dart';
-import '../services/storage_service.dart';
 import 'accounts_tab.dart';
 import 'dashboard_tab.dart';
 import 'plan_tab.dart';
 import 'settings_tab.dart';
 import 'setup_wizard_screen.dart';
 import 'transactions_tab.dart';
+import 'widgets/cloud_sync_badge.dart';
 import 'widgets/quick_entry_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -103,74 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             actions: [
-              ValueListenableBuilder<CloudSyncStatus>(
-                valueListenable: widget.provider.syncStatus,
-                builder: (context, status, _) {
-                  switch (status) {
-                    case CloudSyncStatus.syncing:
-                      return const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 10),
-                        child: Center(
-                          child: SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: AppTheme.electricCyan,
-                            ),
-                          ),
-                        ),
-                      );
-                    case CloudSyncStatus.error:
-                      return IconButton(
-                        icon: const Icon(Icons.cloud_off_outlined,
-                            color: AppTheme.alertCoral),
-                        tooltip: 'Error de sincronización (toca para reintentar)',
-                        onPressed: () async {
-                          final ok = await widget.provider.retryCloudSync();
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                backgroundColor: ok
-                                    ? AppTheme.emeraldGreen
-                                    : AppTheme.alertCoral,
-                                content: Text(
-                                  ok
-                                      ? 'Datos sincronizados con la nube.'
-                                      : 'No se pudo sincronizar: ${widget.provider.lastSyncError ?? ''}',
-                                ),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        },
-                      );
-                    case CloudSyncStatus.synced:
-                      return const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 8),
-                        child: Tooltip(
-                          message: 'Sincronizado en la nube',
-                          child: Icon(Icons.cloud_done_outlined,
-                              size: 20, color: AppTheme.emeraldGreen),
-                        ),
-                      );
-                    case CloudSyncStatus.idle:
-                      return const SizedBox.shrink();
-                  }
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.bolt, color: AppTheme.emeraldGreen),
-                tooltip: 'Nuevo Movimiento',
-                onPressed: () {
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    backgroundColor: Colors.transparent,
-                    builder: (_) => QuickEntrySheet(provider: widget.provider),
-                  );
-                },
-              ),
+              CloudSyncBadge(provider: widget.provider),
             ],
           ),
           body: tabs[_currentIndex],
@@ -217,21 +150,23 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          floatingActionButton: FloatingActionButton(
-            backgroundColor: AppTheme.emeraldGreen,
-            foregroundColor: Colors.white,
-            elevation: 6,
-            shape: const CircleBorder(),
-            child: const Icon(Icons.add, size: 28),
-            onPressed: () {
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: Colors.transparent,
-                builder: (_) => QuickEntrySheet(provider: widget.provider),
-              );
-            },
-          ),
+          floatingActionButton: (_currentIndex == 0 || _currentIndex == 1)
+              ? FloatingActionButton(
+                  backgroundColor: AppTheme.emeraldGreen,
+                  foregroundColor: Colors.white,
+                  elevation: 6,
+                  shape: const CircleBorder(),
+                  child: const Icon(Icons.add, size: 28),
+                  onPressed: () {
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      backgroundColor: Colors.transparent,
+                      builder: (_) => QuickEntrySheet(provider: widget.provider),
+                    );
+                  },
+                )
+              : null,
         );
       },
     );

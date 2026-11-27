@@ -103,6 +103,170 @@ class MovementCategory {
     return tokens;
   }
 
+  /// Built-in merchant keyword dictionary for out-of-the-box categorization (Mexican & common brands).
+  static const Map<String, List<String>> builtInMerchantKeywords = {
+    'Transporte': [
+      'uber',
+      'didi',
+      'indriver',
+      'cabify',
+      'pemex',
+      'costco gas',
+      'mobil',
+      'shell',
+      'bp ',
+      'gasolinera',
+      'caseta',
+      'capufe',
+      'televia',
+      'pase',
+      'estacionamiento',
+      'aeromexico',
+      'volaris',
+      'vivaaerobus',
+      'ado',
+    ],
+    'Comida': [
+      'uber eats',
+      'ubereats',
+      'rappi',
+      'didi food',
+      'didifood',
+      'starbucks',
+      'mcdonalds',
+      'burger king',
+      'dominos',
+      'little caesars',
+      'kfc',
+      'vips',
+      'toks',
+      'sanborns',
+      'chilis',
+      'wings',
+      'tacos',
+      'restaurante',
+      'cafeteria',
+      'cafe',
+      'panaderia',
+      'el globo',
+      'la esperanza',
+      'sushi',
+      'pizza',
+    ],
+    'Supermercado': [
+      'walmart',
+      'chedraui',
+      'soriana',
+      'la comer',
+      'city market',
+      'fresko',
+      'bodega aurrera',
+      'aurrera',
+      'heb',
+      'costco',
+      'sams',
+      'oxxo',
+      '7-eleven',
+      '7 eleven',
+      'circle k',
+      'superama',
+      'supermercado',
+    ],
+    'Servicios': [
+      'cfe',
+      'telmex',
+      'telcel',
+      'at&t',
+      'movistar',
+      'totalplay',
+      'total play',
+      'izzi',
+      'megacable',
+      'sky',
+      'naturgy',
+      'agua',
+      'luz',
+      'internet',
+      'recarga',
+      'predial',
+    ],
+    'Entretenimiento': [
+      'netflix',
+      'spotify',
+      'disney',
+      'hbo',
+      'prime video',
+      'youtube',
+      'cinepolis',
+      'cinemex',
+      'ticketmaster',
+      'boletia',
+      'steam',
+      'playstation',
+      'xbox',
+      'nintendo',
+      'twitch',
+    ],
+    'Salud': [
+      'farmacia',
+      'guadalajara',
+      'benavides',
+      'similares',
+      'del ahorro',
+      'san pablo',
+      'hospital',
+      'clinica',
+      'chopo',
+      'salud digna',
+      'dentista',
+      'optica',
+      'medico',
+    ],
+    'Compras': [
+      'amazon',
+      'mercado libre',
+      'mercadolibre',
+      'merpago',
+      'liverpool',
+      'palacio de hierro',
+      'sears',
+      'coppel',
+      'elektra',
+      'zara',
+      'shein',
+      'temu',
+      'aliexpress',
+      'ali ',
+      'apple store',
+      'home depot',
+      'office depot',
+      'steren',
+      'petco',
+      'pay pal',
+      'paypal',
+    ],
+  };
+
+  /// Matches a description against [builtInMerchantKeywords], preferring longest phrase match.
+  static String? matchBuiltInCategory(String description) {
+    final norm = normalizeText(description);
+    if (norm.isEmpty) return null;
+    String? bestCategory;
+    int bestLen = 0;
+    builtInMerchantKeywords.forEach((category, keywords) {
+      for (final rawKw in keywords) {
+        final kw = normalizeText(rawKw);
+        if (kw.isEmpty) continue;
+        final pattern = RegExp('(^|[^a-z0-9])${RegExp.escape(kw)}([^a-z0-9]|\$)');
+        if (pattern.hasMatch(norm) && kw.length > bestLen) {
+          bestLen = kw.length;
+          bestCategory = category;
+        }
+      }
+    });
+    return bestCategory;
+  }
+
   static const List<String> colorPaletteHex = [
     '#EF4444', // Coral Red
     '#F97316', // Orange

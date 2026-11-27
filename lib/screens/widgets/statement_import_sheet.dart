@@ -308,11 +308,16 @@ class _StatementImportSheetState extends State<StatementImportSheet> {
           isNewPurchase: !_alreadyInBalance,
         );
       } else {
+        final suggestedCat = widget.provider.suggestCategoryForDescription(
+          r.title,
+          isIncome: false,
+          fallback: 'Estado de Cuenta',
+        );
         await widget.provider.addTransaction(
           title: r.title,
           amount: r.amount,
           type: MovementType.expense,
-          category: 'Estado de Cuenta',
+          category: suggestedCat,
           accountId: widget.card.id,
           date: r.date,
           skipBalanceUpdate: _alreadyInBalance,
@@ -322,13 +327,6 @@ class _StatementImportSheetState extends State<StatementImportSheet> {
 
     if (mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppTheme.emeraldGreen,
-          content: Text('${selectedRows.length} movimiento(s)/plan(es) importados a ${widget.card.name}.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
     }
   }
 

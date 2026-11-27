@@ -7,8 +7,10 @@ import '../models/imported_statement.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../services/pdf_statement_parser.dart';
+import 'statement_categorizer_screen.dart';
 import 'statement_import_screen.dart';
 import 'widgets/account_form_sheet.dart';
+import 'widgets/cloud_sync_badge.dart';
 import 'widgets/installment_plan_sheet.dart';
 import 'widgets/quick_entry_sheet.dart';
 
@@ -384,6 +386,7 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
           appBar: AppBar(
             title: Text(card.name, style: const TextStyle(fontSize: 18)),
             actions: [
+              CloudSyncBadge(provider: widget.provider),
               IconButton(
                 icon: const Icon(Icons.edit_outlined),
                 tooltip: 'Editar tarjeta',
@@ -692,10 +695,33 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      'Movimientos en esta Tarjeta',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+                    const Expanded(
+                      child: Text(
+                        'Movimientos en esta Tarjeta',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
+                    if (cardTxs.any((t) =>
+                        t.type == MovementType.expense &&
+                        (t.category == 'Estado de Cuenta' || t.category == 'Varios')))
+                      TextButton.icon(
+                        icon: const Icon(Icons.auto_fix_high, size: 15, color: AppTheme.electricCyan),
+                        label: const Text(
+                          'Clasificar',
+                          style: TextStyle(color: AppTheme.electricCyan, fontSize: 12.5),
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => StatementCategorizerScreen(
+                                provider: widget.provider,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     TextButton.icon(
                       icon: const Icon(Icons.add, size: 16, color: AppTheme.emeraldGreen),
                       label: const Text(
@@ -745,7 +771,6 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
                           return currentKey != key;
                         },
                         onAcceptWithDetails: (details) async {
-                          final messenger = ScaffoldMessenger.of(context);
                           final tx = details.data;
                           final originKey = _periodForDate(tx.date, card.cutoffDay).key;
                           final updated = originKey == key
@@ -754,14 +779,6 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
                           await widget.provider.updateTransaction(updated);
                           if (mounted) {
                             setState(() => _selectedPeriodKey = key);
-                            messenger.showSnackBar(
-                              SnackBar(
-                                backgroundColor: AppTheme.electricCyan,
-                                content: Text('Movido a ${isCurrent ? "Período Actual (${meta.label})" : meta.label}',
-                                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600)),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
                           }
                         },
                         builder: (context, candidateData, _) {
@@ -1243,6 +1260,10 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
     final noteCtrl = TextEditingController(text: tx.note ?? '');
     var selectedDate = tx.date;
     var selectedPeriodKey = _periodForDate(tx.billingDate ?? tx.date, card.cutoffDay).key;
+    var selectedCategory = tx.category;
+    final availableCategories = tx.type == MovementType.income
+        ? widget.provider.incomeCategories
+        : widget.provider.expenseCategories;
 
     showModalBottomSheet(
       context: context,
@@ -1386,6 +1407,35 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
                   },
                 ),
                 const SizedBox(height: 12),
+                const Text('Categoría:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                const SizedBox(height: 6),
+                SizedBox(
+                  height: 36,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: availableCategories.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 6),
+                    itemBuilder: (_, idx) {
+                      final cat = availableCategories[idx];
+                      final isSel = cat.name.toLowerCase() == selectedCategory.toLowerCase();
+                      final chipColor = cat.color;
+                      return ChoiceChip(
+                        avatar: Icon(cat.iconData, size: 14, color: isSel ? Colors.white : chipColor),
+                        label: Text(cat.name),
+                        selected: isSel,
+                        selectedColor: chipColor.withOpacity(0.32),
+                        backgroundColor: AppTheme.surface,
+                        labelStyle: TextStyle(
+                          fontSize: 11.5,
+                          color: isSel ? Colors.white : AppTheme.textSecondary,
+                          fontWeight: isSel ? FontWeight.w700 : FontWeight.normal,
+                        ),
+                        onSelected: (_) => setModalState(() => selectedCategory = cat.name),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
                 TextField(
                   controller: noteCtrl,
                   style: const TextStyle(color: Colors.white, fontSize: 13),
@@ -1415,6 +1465,7 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
                       final updated = tx.copyWith(
                         title: newTitle,
                         amount: newAmount,
+                        category: selectedCategory,
                         date: selectedDate,
                         note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
                         clearBillingDate: originKey == selectedPeriodKey || targetMeta == null,

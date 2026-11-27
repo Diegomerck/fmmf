@@ -249,7 +249,6 @@ class _StatementImportScreenState extends State<StatementImportScreen> {
     }
 
     int importedCount = 0;
-    int associatedCount = 0;
     final List<String> createdPlanIds = [];
     final List<String> createdTxIds = [];
 
@@ -273,7 +272,6 @@ class _StatementImportScreenState extends State<StatementImportScreen> {
             paidMonths: bestPaid,
           ),
         );
-        associatedCount++;
         continue;
       }
 
@@ -311,7 +309,6 @@ class _StatementImportScreenState extends State<StatementImportScreen> {
         await widget.provider.updateTransaction(
           existing.copyWith(note: updatedNote),
         );
-        associatedCount++;
         continue;
       }
 
@@ -332,11 +329,18 @@ class _StatementImportScreenState extends State<StatementImportScreen> {
       } else if (reg.chargeDate != reg.opDate) {
         billingDate = reg.chargeDate;
       }
+      final suggestedCat = reg.isPayment
+          ? 'Pago Tarjeta'
+          : widget.provider.suggestCategoryForDescription(
+              displayDesc,
+              isIncome: false,
+              fallback: 'Estado de Cuenta',
+            );
       final txId = await widget.provider.addTransaction(
         title: displayDesc,
         amount: reg.amount,
         type: reg.isPayment ? MovementType.income : MovementType.expense,
-        category: reg.isPayment ? 'Pago Tarjeta' : 'Estado de Cuenta',
+        category: suggestedCat,
         accountId: widget.card.id,
         date: reg.opDate,
         billingDate: billingDate,
@@ -368,16 +372,6 @@ class _StatementImportScreenState extends State<StatementImportScreen> {
 
     if (mounted) {
       Navigator.pop(context);
-      final summaryMsg = associatedCount > 0
-          ? '$importedCount nuevo(s) y $associatedCount asociado(s) en ${widget.card.name}.'
-          : '$importedCount elemento(s) importados a ${widget.card.name}.';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppTheme.emeraldGreen,
-          content: Text(summaryMsg),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
     }
   }
 

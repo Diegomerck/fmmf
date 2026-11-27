@@ -149,6 +149,9 @@ class FinanceProvider extends ChangeNotifier {
     list.sort((a, b) => b.date.compareTo(a.date));
     return list;
   }
+  Set<String> get importedTransactionIds =>
+      _importedStatements.expand((s) => s.importedTransactionIds).toSet();
+
   AdvisorAnalysis get analysis =>
       _analysis ??
       AdvisorEngine.analyze(
@@ -156,6 +159,7 @@ class FinanceProvider extends ChangeNotifier {
         transactions: _transactions,
         commitments: _commitments,
         installmentPlans: _installmentPlans,
+        importedTransactionIds: importedTransactionIds,
       );
 
   void loadData() {
@@ -206,6 +210,26 @@ class FinanceProvider extends ChangeNotifier {
       _storage.savePendingTransfers(_pendingTransfers);
     }
 
+    // Auto-classify legacy 'Estado de Cuenta' charges with known merchants/keywords on load
+    bool migratedCategories = false;
+    _transactions = _transactions.map((t) {
+      if (t.type == MovementType.expense && t.category == 'Estado de Cuenta') {
+        final suggested = suggestCategoryForDescription(
+          t.title,
+          isIncome: false,
+          fallback: '',
+        );
+        if (suggested.isNotEmpty && suggested != t.category) {
+          migratedCategories = true;
+          return t.copyWith(category: suggested);
+        }
+      }
+      return t;
+    }).toList();
+    if (migratedCategories) {
+      _storage.saveTransactions(_transactions);
+    }
+
     for (final inc in _recurringIncomes) {
       _ensureAnnualScheduleForIncome(inc);
     }
@@ -222,6 +246,7 @@ class FinanceProvider extends ChangeNotifier {
       recurringIncomes: _recurringIncomes,
       scheduledOccurrences: _payOccurrences,
       fundingPriorityIds: _fundingPriorityIds,
+      importedTransactionIds: importedTransactionIds,
       emergencyFundMonths: _emergencyFundMonths,
       emergencyFundEnabled: _emergencyFundEnabled,
       safetyCushion: _safetyCushion,
@@ -1306,11 +1331,13 @@ class FinanceProvider extends ChangeNotifier {
 
     if (card.manualMonthlyDueOverride != null && card.manualMonthlyDueAt != null) {
       final overrideAt = card.manualMonthlyDueAt!;
+      final importedIds = importedTransactionIds;
       double delta = 0.0;
       for (final t in _transactions) {
         if (!t.date.isAfter(overrideAt)) continue;
         if (t.type == MovementType.expense &&
             t.accountId == card.id &&
+            !importedIds.contains(t.id) &&
             t.category != 'Estado de Cuenta' &&
             t.category != 'Compras a Meses') {
           delta += t.amount;
@@ -1500,6 +1527,88 @@ class FinanceProvider extends ChangeNotifier {
     await _storage.saveCategories(_categories);
     await _storage.saveCategoryKeywordCounts(_categoryKeywordCounts);
     notifyListeners();
+  }
+
+  /// Suggests a category for a movement description using user keywords first,
+  /// then the built-in merchant dictionary.
+  String suggestCategoryForDescription(
+    String description, {
+    bool isIncome = false,
+    String fallback = 'Varios',
+  }) {
+    final userMatched = matchCategoryByKeywords(description, isIncome: isIncome);
+    if (userMatched != null) return userMatched.name;
+
+    if (!isIncome) {
+      final builtIn = MovementCategory.matchBuiltInCategory(description);
+      if (builtIn != null) {
+        final existing = categoryByName(builtIn, isIncome: false);
+        return existing?.name ?? builtIn;
+      }
+    }
+    return fallback;
+  }
+
+  /// Auto-classifies all uncategorized ('Estado de Cuenta' or 'Varios') expense
+  /// transactions using user keywords and the built-in merchant dictionary.
+  Future<int> autoClassifyUncategorizedStatements() async {
+    int updatedCount = 0;
+    final nextList = <Transaction>[];
+    for (final tx in _transactions) {
+      if (tx.type == MovementType.expense &&
+          (tx.category == 'Estado de Cuenta' || tx.category == 'Varios')) {
+        final suggested = suggestCategoryForDescription(
+          tx.title,
+          isIncome: false,
+          fallback: '',
+        );
+        if (suggested.isNotEmpty && suggested != tx.category) {
+          nextList.add(tx.copyWith(category: suggested));
+          updatedCount++;
+          continue;
+        }
+      }
+      nextList.add(tx);
+    }
+    if (updatedCount > 0) {
+      _transactions = nextList;
+      await _storage.saveTransactions(_transactions);
+      _recalculate();
+    }
+    return updatedCount;
+  }
+
+  /// Bulk-assigns [newCategory] to all transactions in [txIds], optionally saving
+  /// [keywordToLearn] to that category so future imports categorize automatically.
+  Future<int> bulkAssignCategoryByIds(
+    List<String> txIds,
+    String newCategory, {
+    String? keywordToLearn,
+  }) async {
+    final idSet = txIds.toSet();
+    if (idSet.isEmpty) return 0;
+    int updatedCount = 0;
+    _transactions = _transactions.map((tx) {
+      if (idSet.contains(tx.id) && tx.category != newCategory) {
+        updatedCount++;
+        return tx.copyWith(category: newCategory);
+      }
+      return tx;
+    }).toList();
+
+    if (updatedCount > 0) {
+      await _storage.saveTransactions(_transactions);
+    }
+    if (keywordToLearn != null && keywordToLearn.trim().isNotEmpty) {
+      final cat = categoryByName(newCategory, isIncome: false);
+      if (cat != null) {
+        await addKeywordToCategory(cat.id, keywordToLearn);
+      }
+    }
+    if (updatedCount > 0) {
+      _recalculate();
+    }
+    return updatedCount;
   }
 
   Future<void> addKeywordToCategory(String categoryId, String rawKeyword) async {
