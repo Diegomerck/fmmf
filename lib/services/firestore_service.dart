@@ -4,6 +4,7 @@ import '../models/account.dart';
 import '../models/budget_commitment.dart';
 import '../models/credit_installment.dart';
 import '../models/imported_statement.dart';
+import '../models/movement_category.dart';
 import '../models/recurring_income.dart';
 import '../models/savings_rule.dart';
 import '../models/transaction.dart';
@@ -20,6 +21,19 @@ class CloudSnapshot {
   final List<ScheduledPayOccurrence> payOccurrences;
   final List<CreditInstallmentPlan> installmentPlans;
   final List<ImportedStatement> importedStatements;
+  final List<MovementCategory> categories;
+  final List<String> fundingPriorityIds;
+  final int emergencyFundMonths;
+  final bool emergencyFundEnabled;
+  final double safetyCushion;
+  final List<String> surplusGoalOrder;
+  final bool includeExtraDebtGoal;
+
+  static const List<String> defaultSurplusGoalOrder = [
+    'emergencyFund',
+    'investAndGrow',
+    'payDebtExtra',
+  ];
 
   const CloudSnapshot({
     required this.accounts,
@@ -32,6 +46,13 @@ class CloudSnapshot {
     required this.payOccurrences,
     required this.installmentPlans,
     required this.importedStatements,
+    this.categories = const [],
+    this.fundingPriorityIds = const [],
+    this.emergencyFundMonths = 3,
+    this.emergencyFundEnabled = true,
+    this.safetyCushion = 0.0,
+    this.surplusGoalOrder = defaultSurplusGoalOrder,
+    this.includeExtraDebtGoal = false,
   });
 
   bool get isEmpty =>
@@ -44,7 +65,8 @@ class CloudSnapshot {
       pendingIncomes.isEmpty &&
       payOccurrences.isEmpty &&
       installmentPlans.isEmpty &&
-      importedStatements.isEmpty;
+      importedStatements.isEmpty &&
+      categories.isEmpty;
 }
 
 /// Syncs user-scoped financial data under `users/{uid}/{collection}/{docId}`.
@@ -59,6 +81,7 @@ class FirestoreService {
   static const String colPayOccurrences = 'payOccurrences';
   static const String colInstallmentPlans = 'installmentPlans';
   static const String colImportedStatements = 'importedStatements';
+  static const String colCategories = 'categories';
 
   final FirebaseFirestore _db;
   final Map<String, Set<String>> _knownIds = {};
@@ -88,6 +111,7 @@ class FirestoreService {
   }
 
   Future<CloudSnapshot> loadAll(String uid) async {
+    final userDocFuture = _userDoc(uid).get();
     final results = await Future.wait([
       _loadList(uid, colAccounts, Account.fromJson),
       _loadList(uid, colTransactions, Transaction.fromJson),
@@ -99,7 +123,26 @@ class FirestoreService {
       _loadList(uid, colPayOccurrences, ScheduledPayOccurrence.fromJson),
       _loadList(uid, colInstallmentPlans, CreditInstallmentPlan.fromJson),
       _loadList(uid, colImportedStatements, ImportedStatement.fromJson),
+      _loadList(uid, colCategories, MovementCategory.fromJson),
     ]);
+    final userDoc = await userDocFuture;
+    final userData = userDoc.data();
+    final rawPriority = userData?['fundingPriorityIds'];
+    final priorityIds = rawPriority is List
+        ? rawPriority.whereType<String>().toList()
+        : <String>[];
+    final emergencyMonths =
+        (userData?['emergencyFundMonths'] as num?)?.toInt() ?? 3;
+    final emergencyEnabled =
+        (userData?['emergencyFundEnabled'] as bool?) ?? true;
+    final safetyCushion =
+        (userData?['safetyCushion'] as num?)?.toDouble() ?? 0.0;
+    final rawGoalOrder = userData?['surplusGoalOrder'];
+    final surplusGoalOrder = rawGoalOrder is List && rawGoalOrder.isNotEmpty
+        ? rawGoalOrder.whereType<String>().toList()
+        : CloudSnapshot.defaultSurplusGoalOrder;
+    final includeExtraDebtGoal =
+        (userData?['includeExtraDebtGoal'] as bool?) ?? false;
 
     return CloudSnapshot(
       accounts: results[0] as List<Account>,
@@ -112,6 +155,13 @@ class FirestoreService {
       payOccurrences: results[7] as List<ScheduledPayOccurrence>,
       installmentPlans: results[8] as List<CreditInstallmentPlan>,
       importedStatements: results[9] as List<ImportedStatement>,
+      categories: results[10] as List<MovementCategory>,
+      fundingPriorityIds: priorityIds,
+      emergencyFundMonths: emergencyMonths,
+      emergencyFundEnabled: emergencyEnabled,
+      safetyCushion: safetyCushion,
+      surplusGoalOrder: surplusGoalOrder,
+      includeExtraDebtGoal: includeExtraDebtGoal,
     );
   }
 
@@ -133,8 +183,53 @@ class FirestoreService {
     return items;
   }
 
+  Future<void> saveFundingPriorityIds(String uid, List<String> ids) async {
+    await _userDoc(uid).set(
+      {
+        'uid': uid,
+        'fundingPriorityIds': ids,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  Future<void> saveUserSettings(
+    String uid, {
+    int? emergencyFundMonths,
+    bool? emergencyFundEnabled,
+    double? safetyCushion,
+    List<String>? surplusGoalOrder,
+    bool? includeExtraDebtGoal,
+  }) async {
+    await _userDoc(uid).set(
+      {
+        'uid': uid,
+        if (emergencyFundMonths != null)
+          'emergencyFundMonths': emergencyFundMonths,
+        if (emergencyFundEnabled != null)
+          'emergencyFundEnabled': emergencyFundEnabled,
+        if (safetyCushion != null) 'safetyCushion': safetyCushion,
+        if (surplusGoalOrder != null) 'surplusGoalOrder': surplusGoalOrder,
+        if (includeExtraDebtGoal != null)
+          'includeExtraDebtGoal': includeExtraDebtGoal,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
   Future<void> saveAll(String uid, CloudSnapshot snapshot) async {
     await Future.wait([
+      saveFundingPriorityIds(uid, snapshot.fundingPriorityIds),
+      saveUserSettings(
+        uid,
+        emergencyFundMonths: snapshot.emergencyFundMonths,
+        emergencyFundEnabled: snapshot.emergencyFundEnabled,
+        safetyCushion: snapshot.safetyCushion,
+        surplusGoalOrder: snapshot.surplusGoalOrder,
+        includeExtraDebtGoal: snapshot.includeExtraDebtGoal,
+      ),
       saveCollection<Account>(
           uid, colAccounts, snapshot.accounts, (e) => e.id, (e) => e.toJson()),
       saveCollection<Transaction>(uid, colTransactions, snapshot.transactions,
@@ -155,6 +250,8 @@ class FirestoreService {
           snapshot.installmentPlans, (e) => e.id, (e) => e.toJson()),
       saveCollection<ImportedStatement>(uid, colImportedStatements,
           snapshot.importedStatements, (e) => e.id, (e) => e.toJson()),
+      saveCollection<MovementCategory>(uid, colCategories,
+          snapshot.categories, (e) => e.id, (e) => e.toJson()),
     ]);
   }
 

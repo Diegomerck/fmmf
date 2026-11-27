@@ -52,7 +52,10 @@ This file defines the operating model, code quality rules, release protocols, an
 > *Note: GitHub push and Firebase Hosting deploy steps apply once the repository remote and Firebase project are initialized.*
 
 ### `PUSH TO LIVE` (Public Release)
-1. Bump `version` in `pubspec.yaml` (e.g., `1.0.0+1` → `1.1.0+2`).
+1. Bump `kAppVersion` in `lib/main.dart` and `version` in `pubspec.yaml` following the FMMF versioning scheme (starting from `2.10.1`):
+   - **Small change / bug fix:** increment patch (`2.10.1` → `2.10.2`).
+   - **New feature / significant change:** increment minor and reset patch (`2.10.x` → `2.11.0`).
+   - **Major app overhaul:** increment major only when explicitly instructed by the user (`2.x.x` → `3.0.0`).
 2. Update user-facing changelog / release notes in **Spanish** (if applicable in the app/docs).
 3. Update internal documentation (`README.md`).
 4. Run `flutter analyze` and `flutter test` (if tests exist) and confirm zero errors.

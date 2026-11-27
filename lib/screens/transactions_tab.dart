@@ -31,6 +31,8 @@ class _TransactionsTabState extends State<TransactionsTab> {
       AccountType.yieldVault => Icons.trending_up,
       AccountType.investment => Icons.show_chart,
       AccountType.cash => Icons.payments_outlined,
+      AccountType.vouchers => Icons.confirmation_number_outlined,
+      AccountType.savingsFund => Icons.lock_clock_outlined,
       AccountType.checking || null => Icons.account_balance,
     };
   }

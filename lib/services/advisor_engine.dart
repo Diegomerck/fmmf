@@ -79,6 +79,26 @@ class MonthlyProjection {
   bool get isCumulativeCovered => cumulativeBalance >= 0;
 }
 
+enum TimelineEventType { income, creditCard, fixedBill }
+
+class CashflowTimelineEvent {
+  final DateTime date;
+  final String title;
+  final String subtitle;
+  final double delta;
+  final double runningBalance;
+  final TimelineEventType type;
+
+  const CashflowTimelineEvent({
+    required this.date,
+    required this.title,
+    required this.subtitle,
+    required this.delta,
+    required this.runningBalance,
+    required this.type,
+  });
+}
+
 class AdvisorAnalysis {
   final double netWorth;
   final double totalAssets;
@@ -108,6 +128,11 @@ class AdvisorAnalysis {
   final double runwayMonths;
   final List<FundingSuggestion> fundingSuggestions;
   final List<MonthlyProjection> monthlyProjections;
+  final List<CashflowTimelineEvent> cashflowTimeline;
+  final double lowestTimelineBalance;
+  final DateTime? lowestTimelineDate;
+  final double obligationsBeforeNextPayday;
+  final DateTime? nextPaydayDate;
   final List<FinancialInsight> insights;
 
   const AdvisorAnalysis({
@@ -139,6 +164,11 @@ class AdvisorAnalysis {
     required this.runwayMonths,
     this.fundingSuggestions = const [],
     this.monthlyProjections = const [],
+    this.cashflowTimeline = const [],
+    this.lowestTimelineBalance = 0.0,
+    this.lowestTimelineDate,
+    this.obligationsBeforeNextPayday = 0.0,
+    this.nextPaydayDate,
     required this.insights,
   });
 }
@@ -151,6 +181,9 @@ class AdvisorEngine {
     List<CreditInstallmentPlan> installmentPlans = const [],
     List<RecurringIncome> recurringIncomes = const [],
     List<ScheduledPayOccurrence> scheduledOccurrences = const [],
+    List<String> fundingPriorityIds = const [],
+    int emergencyFundMonths = 3,
+    bool emergencyFundEnabled = true,
     double safetyCushion = 0.0, // Optional reserve cushion in MXN (0 by default)
   }) {
     final Map<String, Account> accountById = {
@@ -171,6 +204,7 @@ class AdvisorEngine {
       if (acc.type == AccountType.creditCard) {
         totalDebt += acc.balance;
       } else {
+        if (!acc.includeInGeneralFinances) continue;
         totalAssets += acc.balance;
         if (acc.purpose == AccountPurpose.debtPayment) {
           dedicatedDebtFunds += acc.balance;
@@ -250,6 +284,7 @@ class AdvisorEngine {
     // 2b. Credit Card Monthly Due (Revolving + this month's MSI/MCI installments, or manual override + deltas)
     double creditMonthlyDue = 0.0;
     final List<ProjectionLineItem> currentMonthCardItems = [];
+    final Map<String, double> cardDueById = {};
     for (final card in accounts.where((a) => a.type == AccountType.creditCard)) {
       double cardDue = 0.0;
       if (card.manualMonthlyDueOverride != null && card.manualMonthlyDueAt != null) {
@@ -281,6 +316,7 @@ class AdvisorEngine {
         cardDue = (revolving + msiMonthly).clamp(0.0, card.balance);
       }
       creditMonthlyDue += cardDue;
+      cardDueById[card.id] = cardDue;
       if (cardDue > 0) {
         currentMonthCardItems.add(
           ProjectionLineItem(
@@ -292,15 +328,133 @@ class AdvisorEngine {
       }
     }
 
-    // 3. Safe to Spend: Liquid cash minus monthly credit due, pending fixed bills, and cushion
-    final double safeToSpendRaw = totalLiquidCash - creditMonthlyDue - pendingCommitments - safetyCushion;
-    final double safeToSpend = safeToSpendRaw < 0 ? 0.0 : safeToSpendRaw;
-
-    // 4. Current Month Cashflow (Received + Projected Remaining Income vs. Obligations without double-counting)
+    // 3. Date-by-Date Cashflow Timeline (next 45 days) & Safe-to-Spend until next payday
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final horizon = today.add(const Duration(days: 45));
     final Map<String, RecurringIncome> incomeById = {
       for (final inc in recurringIncomes) inc.id: inc,
     };
+
+    DateTime clampDayInMonth(int year, int month, int day) {
+      final lastDay = DateTime(year, month + 1, 0).day;
+      return DateTime(year, month, day.clamp(1, lastDay));
+    }
+
+    final List<({DateTime date, String title, String subtitle, double delta, TimelineEventType type})> rawEvents = [];
+
+    // 3a. Scheduled Incomes in next 45 days
+    DateTime? nextPaydayDate;
+    for (final occ in scheduledOccurrences) {
+      if (occ.status != PayOccurrenceStatus.projected) continue;
+      final parent = incomeById[occ.incomeId];
+      if (parent != null && !parent.isActive) continue;
+      if (parent != null && accountById[parent.accountId]?.includeInGeneralFinances == false) {
+        continue;
+      }
+      final d = DateTime(occ.date.year, occ.date.month, occ.date.day);
+      if (d.isBefore(today) || d.isAfter(horizon)) continue;
+      if (nextPaydayDate == null || d.isBefore(nextPaydayDate)) {
+        nextPaydayDate = d;
+      }
+      rawEvents.add((
+        date: d,
+        title: parent?.name ?? 'Ingreso programado',
+        subtitle: 'Cobro programado',
+        delta: occ.amount,
+        type: TimelineEventType.income,
+      ));
+    }
+
+    // 3b. Credit Card due dates in next 45 days
+    for (final card in accounts.where((a) => a.type == AccountType.creditCard)) {
+      final dueAmt = cardDueById[card.id] ?? 0.0;
+      if (dueAmt <= 0) continue;
+      DateTime dueDate;
+      if (card.paymentDueDay > 0) {
+        final candidate = clampDayInMonth(today.year, today.month, card.paymentDueDay);
+        dueDate = candidate.isBefore(today)
+            ? clampDayInMonth(today.year, today.month + 1, card.paymentDueDay)
+            : candidate;
+      } else {
+        dueDate = DateTime(today.year, today.month + 1, 0);
+      }
+      if (!dueDate.isAfter(horizon)) {
+        rawEvents.add((
+          date: dueDate,
+          title: 'Pago ${card.name}',
+          subtitle: card.paymentDueDay > 0
+              ? 'Fecha límite día ${card.paymentDueDay}'
+              : 'Pago del mes',
+          delta: -dueAmt,
+          type: TimelineEventType.creditCard,
+        ));
+      }
+    }
+
+    // 3c. Cash/debit Fixed Commitments in next 45 days
+    for (final c in commitments) {
+      final linkedAcc = accountById[c.accountId];
+      if (linkedAcc?.type == AccountType.creditCard) continue;
+      for (int mOffset = 0; mOffset <= 2; mOffset++) {
+        if (mOffset == 0 && c.isPaidThisMonth) continue;
+        final dueDate = clampDayInMonth(today.year, today.month + mOffset, c.dueDay);
+        if (dueDate.isBefore(today) || dueDate.isAfter(horizon)) continue;
+        rawEvents.add((
+          date: dueDate,
+          title: c.name,
+          subtitle: 'Gasto fijo • ${linkedAcc?.name ?? c.category}',
+          delta: -c.amount,
+          type: TimelineEventType.fixedBill,
+        ));
+      }
+    }
+
+    // Sort chronologically; on same day put income before payments
+    rawEvents.sort((a, b) {
+      final cmp = a.date.compareTo(b.date);
+      if (cmp != 0) return cmp;
+      final aInc = a.delta >= 0 ? 0 : 1;
+      final bInc = b.delta >= 0 ? 0 : 1;
+      return aInc.compareTo(bInc);
+    });
+
+    final List<CashflowTimelineEvent> cashflowTimeline = [];
+    double runningBal = totalLiquidCash;
+    double lowestTimelineBalance = totalLiquidCash;
+    DateTime? lowestTimelineDate;
+    double obligationsBeforeNextPayday = 0.0;
+
+    for (final ev in rawEvents) {
+      runningBal += ev.delta;
+      if (runningBal < lowestTimelineBalance) {
+        lowestTimelineBalance = runningBal;
+        lowestTimelineDate = ev.date;
+      }
+      if (ev.delta < 0 &&
+          (nextPaydayDate == null || ev.date.isBefore(nextPaydayDate))) {
+        obligationsBeforeNextPayday += (-ev.delta);
+      }
+      cashflowTimeline.add(
+        CashflowTimelineEvent(
+          date: ev.date,
+          title: ev.title,
+          subtitle: ev.subtitle,
+          delta: ev.delta,
+          runningBalance: runningBal,
+          type: ev.type,
+        ),
+      );
+    }
+
+    // Safe to Spend: Lowest projected balance across the 45-day timeline (so spending today never causes a future shortfall)
+    final double baseSafe = cashflowTimeline.isNotEmpty
+        ? lowestTimelineBalance
+        : (totalLiquidCash - creditMonthlyDue - pendingCommitments);
+    final double safeToSpendRaw = baseSafe - safetyCushion;
+    final double safeToSpend = safeToSpendRaw < 0 ? 0.0 : safeToSpendRaw;
+
+    // 4. Current Month Cashflow (Received + Projected Remaining Income vs. Obligations without double-counting)
 
     double monthlyIncomeReceived = 0.0;
     double monthlyDirectExpense = 0.0;
@@ -349,13 +503,16 @@ class AdvisorEngine {
     final double projectedEndOfMonthBuffer =
         cashPlusUpcomingIncome - pendingObligationsAndCushion;
 
-    // 5. Runway Calculation (months of survival if active income stops)
+    // 5. Runway Calculation (net reserves after clearing existing debt vs. recurring living burn)
+    final double netEmergencyReserves =
+        (totalSavingsAndReserves - totalDebt).clamp(0.0, double.infinity);
+    final double monthlySurvivalBurn = totalMonthlyCommitments + monthlyDirectExpense;
     final double averageMonthlyBurn =
         (totalMonthlyCommitments + monthlyDirectExpense + creditMonthlyDue) > 0
             ? (totalMonthlyCommitments + monthlyDirectExpense + creditMonthlyDue)
             : 0.0;
-    final double runwayMonths = averageMonthlyBurn > 0
-        ? (totalSavingsAndReserves / averageMonthlyBurn)
+    final double runwayMonths = monthlySurvivalBurn > 0
+        ? (netEmergencyReserves / monthlySurvivalBurn)
         : 0.0;
 
     // 6. Lazy Money Detector
@@ -371,14 +528,24 @@ class AdvisorEngine {
     final List<FundingSuggestion> fundingSuggestions = [];
     if (projectedEndOfMonthBuffer < 0) {
       double remainingGap = -projectedEndOfMonthBuffer;
+      final priorityIndex = <String, int>{
+        for (int i = 0; i < fundingPriorityIds.length; i++)
+          fundingPriorityIds[i]: i,
+      };
       final protectedCandidates = accounts
           .where((a) =>
+              a.includeInGeneralFinances &&
               a.type != AccountType.creditCard &&
               a.purpose == AccountPurpose.protectedGoal &&
               a.balance > 0)
           .toList()
         ..sort((a, b) {
-          // Prefer liquid savings/yieldVault before investments, then largest balance first
+          final aIdx = priorityIndex[a.id];
+          final bIdx = priorityIndex[b.id];
+          if (aIdx != null && bIdx != null) return aIdx.compareTo(bIdx);
+          if (aIdx != null) return -1;
+          if (bIdx != null) return 1;
+          // Default fallback: liquid savings/yieldVault before investments, then largest balance first
           final aInv = a.type == AccountType.investment ? 1 : 0;
           final bInv = b.type == AccountType.investment ? 1 : 0;
           if (aInv != bInv) return aInv.compareTo(bInv);
@@ -501,15 +668,31 @@ class AdvisorEngine {
     }
 
     // Insight: Runway Health
-    if (averageMonthlyBurn <= 0) {
+    // Insight: Runway Health (only when emergency fund goal is enabled)
+    if (!emergencyFundEnabled) {
+      // User disabled emergency fund tracking
+    } else if (monthlySurvivalBurn <= 0) {
       insights.add(
         FinancialInsight(
           id: 'runway',
-          title: 'Respaldo Financiero (Sin datos de gasto aún)',
+          title: 'Fondo de Emergencia y Respaldo',
           message:
-              'Tienes \$${totalSavingsAndReserves.toStringAsFixed(0)} MXN en reservas líquidas y ahorros. Registra tus gastos del mes o gastos fijos para calcular cuántos meses cubren.',
+              'Tienes \$${totalSavingsAndReserves.toStringAsFixed(0)} en cuentas/ahorros y \$${totalDebt.toStringAsFixed(0)} en deuda de tarjetas. Registra tus gastos fijos mensuales para calcular cuántos meses cubren.',
           type: InsightType.projection,
-          highlightMetric: 'Sin gastos aún',
+          highlightMetric: 'Sin fijos aún',
+        ),
+      );
+    } else if (netEmergencyReserves <= 0) {
+      insights.add(
+        FinancialInsight(
+          id: 'runway',
+          title: 'Fondo de Emergencia y Respaldo',
+          message:
+              '• Ahorros y liquidez: \$${totalSavingsAndReserves.toStringAsFixed(0)}\n'
+              '• Deuda en tarjetas: -\$${totalDebt.toStringAsFixed(0)}\n'
+              '• Respaldo libre: \$0 (tu deuda actual supera tus ahorros)',
+          type: InsightType.warning,
+          highlightMetric: '0.0 meses',
         ),
       );
     } else {
@@ -517,10 +700,12 @@ class AdvisorEngine {
         FinancialInsight(
           id: 'runway',
           title: 'Fondo de Emergencia y Respaldo',
-          message: runwayMonths >= 6
-              ? 'Tus ahorros y liquidez (\$${totalSavingsAndReserves.toStringAsFixed(0)}) cubren ${runwayMonths.toStringAsFixed(1)} meses de tu gasto mensual (\$${averageMonthlyBurn.toStringAsFixed(0)}/mes).'
-              : 'Tus ahorros y liquidez (\$${totalSavingsAndReserves.toStringAsFixed(0)}) cubren ${runwayMonths.toStringAsFixed(1)} meses de tu gasto mensual (\$${averageMonthlyBurn.toStringAsFixed(0)}/mes). Referencia estándar: 3 a 6 meses (\$${(averageMonthlyBurn * 3).toStringAsFixed(0)} MXN).',
-          type: runwayMonths >= 3 ? InsightType.praise : InsightType.projection,
+          message:
+              '• Ahorros y liquidez: \$${totalSavingsAndReserves.toStringAsFixed(0)}\n'
+              '• Deuda en tarjetas: -\$${totalDebt.toStringAsFixed(0)}\n'
+              '• Respaldo neto libre: \$${netEmergencyReserves.toStringAsFixed(0)}\n'
+              '• Gasto fijo mensual: \$${monthlySurvivalBurn.toStringAsFixed(0)}/mes (Meta ${emergencyFundMonths}m: \$${(monthlySurvivalBurn * emergencyFundMonths).toStringAsFixed(0)})',
+          type: runwayMonths >= emergencyFundMonths ? InsightType.praise : InsightType.projection,
           highlightMetric: '${runwayMonths.toStringAsFixed(1)} meses',
         ),
       );
@@ -730,6 +915,11 @@ class AdvisorEngine {
       runwayMonths: runwayMonths,
       fundingSuggestions: fundingSuggestions,
       monthlyProjections: monthlyProjections,
+      cashflowTimeline: cashflowTimeline,
+      lowestTimelineBalance: lowestTimelineBalance,
+      lowestTimelineDate: lowestTimelineDate,
+      obligationsBeforeNextPayday: obligationsBeforeNextPayday,
+      nextPaydayDate: nextPaydayDate,
       insights: insights,
     );
   }

@@ -30,11 +30,19 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
   late TextEditingController _cutoffCtrl;
   late TextEditingController _dueCtrl;
   late TextEditingController _availableCtrl;
+  late TextEditingController _restrictionCtrl;
+  late TextEditingController _multiplierCtrl;
 
   late AccountType _selectedType;
   late AccountPurpose _selectedPurpose;
   late String _selectedColorHex;
+  late bool _includeInGeneralFinances;
+  late List<String> _allowedCategories;
+  DateTime? _releaseDate;
+  String? _releaseTargetAccountId;
   bool _purposeManuallyChanged = false;
+  bool _includeManuallyChanged = false;
+  bool _multiplierManuallyChanged = false;
   bool _lastEditedAvailable = false;
   bool _isSyncingCreditFields = false;
 
@@ -47,6 +55,13 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
     _selectedType = acc?.type ?? AccountType.checking;
     _selectedPurpose = acc?.purpose ?? Account.defaultPurposeForType(_selectedType);
     _purposeManuallyChanged = acc != null;
+    _includeInGeneralFinances = acc?.includeInGeneralFinances ??
+        Account.defaultIncludeInGeneralFinances(_selectedType);
+    _includeManuallyChanged = acc != null;
+    _multiplierManuallyChanged = acc != null;
+    _allowedCategories = List<String>.from(acc?.allowedCategories ?? const []);
+    _releaseDate = acc?.releaseDate;
+    _releaseTargetAccountId = acc?.releaseTargetAccountId;
     if (acc != null) {
       _selectedColorHex = acc.colorHex;
     } else {
@@ -83,6 +98,14 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
         ? (acc.creditLimit - acc.balance).clamp(0.0, double.infinity).toStringAsFixed(2)
         : '';
     _availableCtrl = TextEditingController(text: initialAvailable);
+    _restrictionCtrl = TextEditingController(text: acc?.restrictionNote ?? '');
+    final initialMult = acc?.contributionMultiplier ??
+        Account.defaultMultiplierForType(_selectedType);
+    _multiplierCtrl = TextEditingController(
+      text: initialMult == initialMult.roundToDouble()
+          ? initialMult.toStringAsFixed(0)
+          : initialMult.toString(),
+    );
   }
 
   double _parseNum(String s) => double.tryParse(s.replaceAll(',', '').trim()) ?? 0.0;
@@ -135,6 +158,8 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
     _cutoffCtrl.dispose();
     _dueCtrl.dispose();
     _availableCtrl.dispose();
+    _restrictionCtrl.dispose();
+    _multiplierCtrl.dispose();
     super.dispose();
   }
 
@@ -152,6 +177,10 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
         return 'Tarjeta de Crédito';
       case AccountType.cash:
         return 'Efectivo';
+      case AccountType.vouchers:
+        return 'Vales / Beneficios';
+      case AccountType.savingsFund:
+        return 'Fondo de Ahorro';
     }
   }
 
@@ -164,6 +193,9 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
     final creditLimit = double.tryParse(_limitCtrl.text.replaceAll(',', '').trim()) ?? 0.0;
     final cutoffDay = int.tryParse(_cutoffCtrl.text.trim()) ?? 0;
     final dueDay = int.tryParse(_dueCtrl.text.trim()) ?? 0;
+    final multiplier = (double.tryParse(_multiplierCtrl.text.replaceAll(',', '').trim()) ?? 1.0)
+        .clamp(0.1, 100.0);
+    final restrictionNote = _restrictionCtrl.text.trim();
 
     if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -195,6 +227,14 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
       purpose: _selectedType == AccountType.creditCard
           ? AccountPurpose.general
           : _selectedPurpose,
+      includeInGeneralFinances: _selectedType == AccountType.creditCard
+          ? true
+          : _includeInGeneralFinances,
+      allowedCategories: _allowedCategories,
+      restrictionNote: restrictionNote,
+      releaseDate: _releaseDate,
+      contributionMultiplier: multiplier,
+      releaseTargetAccountId: _releaseTargetAccountId,
     );
 
     if (_isEditing) {
@@ -233,6 +273,8 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
       AccountType.investment => 'Nombre (ej. GBM+, Fintual)',
       AccountType.creditCard => 'Nombre (ej. Tarjeta Nu)',
       AccountType.cash => 'Nombre (ej. Efectivo)',
+      AccountType.vouchers => 'Nombre (ej. Vales de Despensa)',
+      AccountType.savingsFund => 'Nombre (ej. Fondo de Ahorro)',
     };
 
     return Container(
@@ -274,7 +316,11 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: AccountType.values.map((t) {
+              children: AccountType.values
+                  .where((t) =>
+                      t != AccountType.investment ||
+                      _selectedType == AccountType.investment)
+                  .map((t) {
                 final selected = t == _selectedType;
                 return ChoiceChip(
                   label: Text(_typeLabel(t)),
@@ -289,6 +335,15 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
                     _selectedType = t;
                     if (!_purposeManuallyChanged) {
                       _selectedPurpose = Account.defaultPurposeForType(t);
+                    }
+                    if (!_includeManuallyChanged) {
+                      _includeInGeneralFinances =
+                          Account.defaultIncludeInGeneralFinances(t);
+                    }
+                    if (!_multiplierManuallyChanged) {
+                      final m = Account.defaultMultiplierForType(t);
+                      _multiplierCtrl.text =
+                          m == m.roundToDouble() ? m.toStringAsFixed(0) : m.toString();
                     }
                   }),
                 );
@@ -543,6 +598,224 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
                     }),
                   );
                 }).toList(),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    initiallyExpanded: _selectedType == AccountType.vouchers ||
+                        _selectedType == AccountType.savingsFund ||
+                        !_includeInGeneralFinances ||
+                        _allowedCategories.isNotEmpty ||
+                        _restrictionCtrl.text.isNotEmpty ||
+                        _releaseDate != null ||
+                        (double.tryParse(_multiplierCtrl.text) ?? 1.0) != 1.0,
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    iconColor: AppTheme.electricCyan,
+                    collapsedIconColor: AppTheme.textSecondary,
+                    title: const Text(
+                      'Reglas avanzadas (inclusión, categorías, liberación)',
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.white),
+                    ),
+                    subtitle: Text(
+                      _includeInGeneralFinances
+                          ? 'Incluida en tus finanzas generales'
+                          : 'Aislada de Margen Libre y pago de tarjetas',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: _includeInGeneralFinances
+                            ? AppTheme.emeraldGreen
+                            : AppTheme.amberGold,
+                      ),
+                    ),
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        activeColor: AppTheme.emeraldGreen,
+                        title: const Text(
+                          'Considerar en finanzas generales',
+                          style: TextStyle(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: const Text(
+                          'Si lo apagas (ej. Vales o Fondo de Ahorro), no suma a tu Margen Libre ni al pago de tarjetas.',
+                          style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                        ),
+                        value: _includeInGeneralFinances,
+                        onChanged: (val) => setState(() {
+                          _includeInGeneralFinances = val;
+                          _includeManuallyChanged = true;
+                        }),
+                      ),
+                      const SizedBox(height: 8),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Categorías de gasto que cubre esta cuenta (opcional):',
+                          style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: widget.provider.expenseCategories.map((cat) {
+                            final selected = _allowedCategories.contains(cat.name);
+                            return FilterChip(
+                              label: Text(cat.name),
+                              selected: selected,
+                              selectedColor: AppTheme.electricCyan.withOpacity(0.24),
+                              backgroundColor: AppTheme.card,
+                              labelStyle: TextStyle(
+                                fontSize: 11,
+                                color: selected ? Colors.white : AppTheme.textSecondary,
+                              ),
+                              onSelected: (isSel) {
+                                setState(() {
+                                  if (isSel) {
+                                    if (!_allowedCategories.contains(cat.name)) {
+                                      _allowedCategories.add(cat.name);
+                                    }
+                                  } else {
+                                    _allowedCategories.remove(cat.name);
+                                  }
+                                });
+                              },
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _restrictionCtrl,
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: 'Restricción / comercios (ej. Solo Chedraui)',
+                          filled: true,
+                          fillColor: AppTheme.card,
+                          isDense: true,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: InkWell(
+                              onTap: () async {
+                                final now = DateTime.now();
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: _releaseDate ?? DateTime(now.year, 12, 15),
+                                  firstDate: DateTime(now.year - 1),
+                                  lastDate: DateTime(now.year + 10),
+                                );
+                                if (picked != null && mounted) {
+                                  setState(() => _releaseDate = picked);
+                                }
+                              },
+                              borderRadius: BorderRadius.circular(10),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.card,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: AppTheme.border),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.event, size: 16, color: AppTheme.electricCyan),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        _releaseDate != null
+                                            ? 'Liberación: ${_releaseDate!.day}/${_releaseDate!.month}/${_releaseDate!.year}'
+                                            : 'Fecha liberación (opcional)',
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          color: _releaseDate != null ? Colors.white : AppTheme.textMuted,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    if (_releaseDate != null)
+                                      GestureDetector(
+                                        onTap: () => setState(() => _releaseDate = null),
+                                        child: const Icon(Icons.close, size: 15, color: AppTheme.textMuted),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: _multiplierCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              style: const TextStyle(color: Colors.white, fontSize: 13),
+                              onChanged: (_) => _multiplierManuallyChanged = true,
+                              decoration: InputDecoration(
+                                labelText: 'Multiplicador',
+                                suffixText: '×',
+                                filled: true,
+                                fillColor: AppTheme.card,
+                                isDense: true,
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Builder(builder: (_) {
+                        final targetOptions = widget.provider.accounts
+                            .where((a) =>
+                                a.id != widget.existingAccount?.id &&
+                                a.type != AccountType.creditCard)
+                            .toList();
+                        if (targetOptions.isEmpty) return const SizedBox.shrink();
+                        final safeTarget = targetOptions.any((a) => a.id == _releaseTargetAccountId)
+                            ? _releaseTargetAccountId
+                            : null;
+                        return DropdownButtonFormField<String?>(
+                          value: safeTarget,
+                          dropdownColor: AppTheme.card,
+                          style: const TextStyle(color: Colors.white, fontSize: 12.5),
+                          decoration: InputDecoration(
+                            labelText: 'Cuenta destino al liberar (opcional)',
+                            filled: true,
+                            fillColor: AppTheme.card,
+                            isDense: true,
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          items: [
+                            const DropdownMenuItem<String?>(
+                              value: null,
+                              child: Text('Elegir al liberar', style: TextStyle(color: AppTheme.textMuted)),
+                            ),
+                            ...targetOptions.map((a) => DropdownMenuItem<String?>(
+                                  value: a.id,
+                                  child: Text('${a.name} (${a.institution})'),
+                                )),
+                          ],
+                          onChanged: (val) => setState(() => _releaseTargetAccountId = val),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
               ),
             ],
 

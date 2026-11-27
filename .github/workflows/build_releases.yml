@@ -1,0 +1,109 @@
+name: Build Releases
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - '**'
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Flutter 3.24.5
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Android APK (Release)
+        run: flutter build apk --release
+
+      - name: Upload app-release.apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish to GitHub Releases
+    needs: [build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-release-apk
+          path: release-assets
+
+      - name: Determine Release Tag and Prepare Assets
+        id: release_info
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            APP_VER=$(grep 'kAppVersion =' lib/main.dart | sed -E 's/.*"([0-9.]+)".*/\1/' | head -n 1)
+            TAG="v${APP_VER:-2.10.1}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "title=FMMF $TAG" >> $GITHUB_OUTPUT
+          mv "release-assets/app-release.apk" "release-assets/FMMF ${TAG}.apk"
+          cp "release-assets/FMMF ${TAG}.apk" "release-assets/FMMF-latest.apk"
+
+      - name: Publish to Public Releases Repo
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          repository: Diegomerck/fmmf-releases
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: ${{ steps.release_info.outputs.title }}
+          body: |
+            ## FMMF (${{ steps.release_info.outputs.tag }})
+
+            Official compiled Android APK ready for installation:
+            - 🤖 **Android**: `FMMF ${{ steps.release_info.outputs.tag }}.apk` (Direct download alias: `FMMF-latest.apk`)
+          files: |
+            release-assets/FMMF ${{ steps.release_info.outputs.tag }}.apk
+            release-assets/FMMF-latest.apk
+          token: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Archive Release in Private Repo
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: ${{ steps.release_info.outputs.title }}
+          body: |
+            ## FMMF (${{ steps.release_info.outputs.tag }}) [Private Archive]
+
+            Compiled release binary:
+            - 🤖 **Android**: `FMMF ${{ steps.release_info.outputs.tag }}.apk`
+          files: |
+            release-assets/FMMF ${{ steps.release_info.outputs.tag }}.apk
+            release-assets/FMMF-latest.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

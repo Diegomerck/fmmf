@@ -16,6 +16,10 @@ Future<void> downloadJsonFile(String filename, String content) async {
   // Non-web platforms: no-op fallback
 }
 
+Future<bool> openExternalDownloadUrl(String url, {String? filename}) async {
+  return false;
+}
+
 Future<String?> pickJsonFileContent() async {
   return null;
 }

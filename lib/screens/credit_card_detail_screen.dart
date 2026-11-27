@@ -354,8 +354,20 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
           }
         }
 
+        final now = DateTime.now();
+        final endOfToday = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
         for (final list in periodEntries.values) {
-          list.sort((a, b) => b.date.compareTo(a.date));
+          list.sort((a, b) {
+            final aIsFuture = a.date.isAfter(endOfToday);
+            final bIsFuture = b.date.isAfter(endOfToday);
+            if (aIsFuture != bIsFuture) {
+              return aIsFuture ? 1 : -1;
+            }
+            if (aIsFuture && bIsFuture) {
+              return a.date.compareTo(b.date);
+            }
+            return b.date.compareTo(a.date);
+          });
         }
 
         final sortedPeriodKeys = periodMeta.keys
@@ -456,10 +468,14 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text(
-                            'PAGO DEL MES (NO GENERAR INTERESES)',
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white70, letterSpacing: 0.7),
+                          const Expanded(
+                            child: Text(
+                              'PAGO DEL MES (NO GENERAR INTERESES)',
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white70, letterSpacing: 0.7),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
+                          const SizedBox(width: 8),
                           InkWell(
                             onTap: () => _showEditMonthlyDueDialog(context, card, monthlyDue),
                             borderRadius: BorderRadius.circular(8),
@@ -940,10 +956,14 @@ class _CreditCardDetailScreenState extends State<CreditCardDetailScreen> {
                       title: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text(
-                            'Estados de Cuenta Importados',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white),
+                          const Expanded(
+                            child: Text(
+                              'Estados de Cuenta Importados',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
+                          const SizedBox(width: 8),
                           Text(
                             statements.isEmpty
                                 ? 'Ninguno'

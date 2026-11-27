@@ -4,6 +4,7 @@ import '../../models/account.dart';
 import '../../models/credit_installment.dart';
 import '../../models/transaction.dart';
 import '../../providers/finance_provider.dart';
+import 'category_form_dialog.dart';
 
 class QuickEntrySheet extends StatefulWidget {
   final FinanceProvider provider;
@@ -38,30 +39,13 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
   bool _isInterestFree = true;
   bool _alreadyInBalance = false;
   bool _applyInCurrentPeriod = false;
-
-  final List<Map<String, String>> _expenseCategories = [
-    {'name': 'Comida', 'icon': '🍔'},
-    {'name': 'Transporte', 'icon': '🚗'},
-    {'name': 'Supermercado', 'icon': '🛒'},
-    {'name': 'Servicios', 'icon': '⚡'},
-    {'name': 'Entretenimiento', 'icon': '🍿'},
-    {'name': 'Salud', 'icon': '💊'},
-    {'name': 'Compras', 'icon': '🛍️'},
-    {'name': 'Varios', 'icon': '📦'},
-  ];
-
-  final List<Map<String, String>> _incomeCategories = [
-    {'name': 'Sueldo', 'icon': '💼'},
-    {'name': 'Freelance', 'icon': '💻'},
-    {'name': 'Bono / Regalo', 'icon': '🎁'},
-    {'name': 'Reembolso', 'icon': '💸'},
-    {'name': 'Rendimientos', 'icon': '📈'},
-    {'name': 'Otro Ingreso', 'icon': '💰'},
-  ];
+  bool _manualCategoryOverride = false;
+  bool _autoMatchedCategory = false;
 
   @override
   void initState() {
     super.initState();
+    _titleCtrl.addListener(_onTitleChanged);
     final accounts = widget.provider.accounts;
     if (widget.initialAccountId != null &&
         accounts.any((a) => a.id == widget.initialAccountId)) {
@@ -74,8 +58,26 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
             _selectedAccountId;
   }
 
+  void _onTitleChanged() {
+    if (_selectedType == MovementType.transfer || _manualCategoryOverride) return;
+    final matched = widget.provider.matchCategoryByKeywords(
+      _titleCtrl.text,
+      isIncome: _selectedType == MovementType.income,
+    );
+    if (matched != null &&
+        (matched.name != _selectedCategory || !_autoMatchedCategory)) {
+      setState(() {
+        _selectedCategory = matched.name;
+        _autoMatchedCategory = true;
+      });
+    } else if (matched == null && _autoMatchedCategory) {
+      setState(() => _autoMatchedCategory = false);
+    }
+  }
+
   @override
   void dispose() {
+    _titleCtrl.removeListener(_onTitleChanged);
     _smartInputCtrl.dispose();
     _amountCtrl.dispose();
     _titleCtrl.dispose();
@@ -87,14 +89,19 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
   void _onTypeChanged(MovementType newType) {
     setState(() {
       _selectedType = newType;
+      _manualCategoryOverride = false;
+      _autoMatchedCategory = false;
       if (newType == MovementType.expense) {
-        _selectedCategory = _expenseCategories.first['name']!;
+        _selectedCategory =
+            widget.provider.expenseCategories.firstOrNull?.name ?? 'Comida';
       } else if (newType == MovementType.income) {
-        _selectedCategory = _incomeCategories.first['name']!;
+        _selectedCategory =
+            widget.provider.incomeCategories.firstOrNull?.name ?? 'Sueldo';
       } else {
         _selectedCategory = 'Transferencia';
       }
     });
+    _onTitleChanged();
   }
 
   void _submitSmartInput() async {
@@ -235,12 +242,24 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
       );
     }
 
+    List<String> learnedKeywords = const [];
+    if (_selectedType != MovementType.transfer) {
+      learnedKeywords = await widget.provider.recordCategoryUsageAndAutoLearn(
+        description: title,
+        categoryName: _selectedCategory,
+        isIncome: _selectedType == MovementType.income,
+      );
+    }
+
     if (mounted) {
       Navigator.pop(context);
+      final learnedMsg = learnedKeywords.isNotEmpty
+          ? ' • Auto-aprendido: ${learnedKeywords.map((w) => '"$w"').join(", ")} → $_selectedCategory'
+          : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: AppTheme.emeraldGreen,
-          content: Text('Registrado: $title (\$$amount MXN)'),
+          content: Text('Registrado: $title (\$$amount MXN)$learnedMsg'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -250,8 +269,8 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
   @override
   Widget build(BuildContext context) {
     final activeCategories = _selectedType == MovementType.income
-        ? _incomeCategories
-        : _expenseCategories;
+        ? widget.provider.incomeCategories
+        : widget.provider.expenseCategories;
 
     final availableAccounts = _selectedType == MovementType.income
         ? widget.provider.accounts.where((a) => a.type != AccountType.creditCard).toList()
@@ -280,21 +299,32 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Row(
-                  children: [
-                    Icon(Icons.bolt, color: AppTheme.emeraldGreen),
-                    SizedBox(width: 8),
-                    Text(
-                      'Nuevo Movimiento',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                const Expanded(
+                  child: Row(
+                    children: [
+                      Icon(Icons.bolt, color: AppTheme.emeraldGreen),
+                      SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'Nuevo Movimiento',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+                const SizedBox(width: 4),
                 TextButton(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                   onPressed: () {
                     setState(() {
                       _isNaturalInput = !_isNaturalInput;
@@ -302,7 +332,7 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
                   },
                   child: Text(
                     _isNaturalInput ? 'Modo Guiado' : 'Modo Texto Rápido',
-                    style: const TextStyle(color: AppTheme.electricCyan),
+                    style: const TextStyle(color: AppTheme.electricCyan, fontSize: 13),
                   ),
                 ),
               ],
@@ -433,30 +463,92 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
 
               if (_selectedType != MovementType.transfer) ...[
                 const SizedBox(height: 14),
-                const Text('Categoría:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                Row(
+                  children: [
+                    const Text('Categoría:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    if (_autoMatchedCategory) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppTheme.electricCyan.withOpacity(0.16),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppTheme.electricCyan.withOpacity(0.45)),
+                        ),
+                        child: const Text(
+                          'Auto por palabra clave',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.electricCyan,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 38,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
-                    itemCount: activeCategories.length,
+                    itemCount: activeCategories.length + 1,
                     separatorBuilder: (_, __) => const SizedBox(width: 8),
                     itemBuilder: (context, idx) {
+                      if (idx == activeCategories.length) {
+                        return ActionChip(
+                          avatar: const Icon(Icons.add,
+                              size: 16, color: AppTheme.electricCyan),
+                          label: const Text('Nueva'),
+                          backgroundColor: AppTheme.surface,
+                          side: BorderSide(
+                              color: AppTheme.electricCyan.withOpacity(0.45)),
+                          labelStyle: const TextStyle(
+                            color: AppTheme.electricCyan,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          onPressed: () async {
+                            final created = await showCategoryFormDialog(
+                              context,
+                              initialIsIncome:
+                                  _selectedType == MovementType.income,
+                              allowTypeToggle: false,
+                            );
+                            if (created != null) {
+                              await widget.provider.addCategory(created);
+                              if (mounted) {
+                                setState(
+                                    () => _selectedCategory = created.name);
+                              }
+                            }
+                          },
+                        );
+                      }
                       final cat = activeCategories[idx];
-                      final isSelected = cat['name'] == _selectedCategory;
-                      final chipColor = _selectedType == MovementType.income
-                          ? AppTheme.emeraldGreen
-                          : AppTheme.alertCoral;
+                      final isSelected = cat.name == _selectedCategory;
+                      final chipColor = cat.color;
                       return ChoiceChip(
-                        label: Text('${cat['icon']} ${cat['name']}'),
+                        avatar: Icon(
+                          cat.iconData,
+                          size: 15,
+                          color: isSelected ? Colors.white : chipColor,
+                        ),
+                        label: Text(cat.name),
                         selected: isSelected,
-                        selectedColor: chipColor.withOpacity(0.28),
+                        selectedColor: chipColor.withOpacity(0.32),
                         backgroundColor: AppTheme.surface,
                         labelStyle: TextStyle(
-                          color: isSelected ? Colors.white : AppTheme.textSecondary,
+                          color: isSelected
+                              ? Colors.white
+                              : AppTheme.textSecondary,
                           fontSize: 12,
                         ),
-                        onSelected: (_) => setState(() => _selectedCategory = cat['name']!),
+                        onSelected: (_) => setState(() {
+                              _selectedCategory = cat.name;
+                              _manualCategoryOverride = true;
+                              _autoMatchedCategory = false;
+                            }),
                       );
                     },
                   ),

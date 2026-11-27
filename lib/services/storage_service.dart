@@ -10,6 +10,7 @@ import '../models/savings_rule.dart';
 import '../models/recurring_income.dart';
 import '../models/credit_installment.dart';
 import '../models/imported_statement.dart';
+import '../models/movement_category.dart';
 import 'firestore_service.dart';
 
 enum CloudSyncStatus { idle, syncing, synced, error }
@@ -25,6 +26,14 @@ class StorageService {
   static const String _keyPayOccurrences = 'fmmf_pay_occurrences';
   static const String _keyInstallmentPlans = 'fmmf_installment_plans';
   static const String _keyImportedStatements = 'fmmf_imported_statements';
+  static const String _keyCategories = 'fmmf_categories';
+  static const String _keyCategoryKeywordCounts = 'fmmf_category_keyword_counts';
+  static const String _keyFundingPriorityIds = 'fmmf_funding_priority_ids';
+  static const String _keyEmergencyFundMonths = 'fmmf_emergency_fund_months';
+  static const String _keyEmergencyFundEnabled = 'fmmf_emergency_fund_enabled';
+  static const String _keySafetyCushion = 'fmmf_safety_cushion';
+  static const String _keySurplusGoalOrder = 'fmmf_surplus_goal_order';
+  static const String _keyIncludeExtraDebtGoal = 'fmmf_include_extra_debt_goal';
   static const String _keyPendingCloudSync = 'fmmf_pending_cloud_sync';
 
   final SharedPreferences _prefs;
@@ -54,6 +63,13 @@ class StorageService {
         payOccurrences: loadPayOccurrences(),
         installmentPlans: loadInstallmentPlans(),
         importedStatements: loadImportedStatements(),
+        categories: loadCategories(),
+        fundingPriorityIds: loadFundingPriorityIds(),
+        emergencyFundMonths: loadEmergencyFundMonths(),
+        emergencyFundEnabled: loadEmergencyFundEnabled(),
+        safetyCushion: loadSafetyCushion(),
+        surplusGoalOrder: loadSurplusGoalOrder(),
+        includeExtraDebtGoal: loadIncludeExtraDebtGoal(),
       );
 
   /// Attaches user-scoped Cloud Firestore sync, migrating local or pending data if needed.
@@ -118,6 +134,13 @@ class StorageService {
     await _prefs.setString(_keyPayOccurrences, jsonEncode(snapshot.payOccurrences.map((e) => e.toJson()).toList()));
     await _prefs.setString(_keyInstallmentPlans, jsonEncode(snapshot.installmentPlans.map((e) => e.toJson()).toList()));
     await _prefs.setString(_keyImportedStatements, jsonEncode(snapshot.importedStatements.map((e) => e.toJson()).toList()));
+    await _prefs.setString(_keyCategories, jsonEncode(snapshot.categories.map((e) => e.toJson()).toList()));
+    await _prefs.setString(_keyFundingPriorityIds, jsonEncode(snapshot.fundingPriorityIds));
+    await _prefs.setInt(_keyEmergencyFundMonths, snapshot.emergencyFundMonths);
+    await _prefs.setBool(_keyEmergencyFundEnabled, snapshot.emergencyFundEnabled);
+    await _prefs.setDouble(_keySafetyCushion, snapshot.safetyCushion);
+    await _prefs.setString(_keySurplusGoalOrder, jsonEncode(snapshot.surplusGoalOrder));
+    await _prefs.setBool(_keyIncludeExtraDebtGoal, snapshot.includeExtraDebtGoal);
   }
 
   Future<void> _syncToCloud<T>(
@@ -328,6 +351,221 @@ class StorageService {
     await _syncToCloud<ImportedStatement>(FirestoreService.colImportedStatements, statements, (e) => e.id, (e) => e.toJson());
   }
 
+  // --- MOVEMENT CATEGORIES ---
+  List<MovementCategory> loadCategories() {
+    final raw = _prefs.getString(_keyCategories);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return list
+          .map((e) => MovementCategory.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveCategories(List<MovementCategory> categories) async {
+    final raw = jsonEncode(categories.map((e) => e.toJson()).toList());
+    await _prefs.setString(_keyCategories, raw);
+    await _syncToCloud<MovementCategory>(
+      FirestoreService.colCategories,
+      categories,
+      (e) => e.id,
+      (e) => e.toJson(),
+    );
+  }
+
+  Map<String, int> loadCategoryKeywordCounts() {
+    final raw = _prefs.getString(_keyCategoryKeywordCounts);
+    if (raw == null) return {};
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return map.map((k, v) => MapEntry(k, (v as num?)?.toInt() ?? 0));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveCategoryKeywordCounts(Map<String, int> counts) async {
+    await _prefs.setString(_keyCategoryKeywordCounts, jsonEncode(counts));
+  }
+
+  // --- FUNDING PRIORITY ---
+  List<String> loadFundingPriorityIds() {
+    final raw = _prefs.getString(_keyFundingPriorityIds);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return list.whereType<String>().toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveFundingPriorityIds(List<String> ids) async {
+    await _prefs.setString(_keyFundingPriorityIds, jsonEncode(ids));
+    final firestore = _firestore;
+    final uid = _uid;
+    if (firestore == null || uid == null) return;
+    await _prefs.setBool(_keyPendingCloudSync, true);
+    _inFlightSyncs++;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveFundingPriorityIds(uid, ids);
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      if (_inFlightSyncs == 0 && lastSyncError == null) {
+        await _prefs.setBool(_keyPendingCloudSync, false);
+        syncStatus.value = CloudSyncStatus.synced;
+      }
+    } catch (e) {
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+    }
+  }
+
+  // --- USER GOALS & PARAMETERS ---
+  int loadEmergencyFundMonths() => _prefs.getInt(_keyEmergencyFundMonths) ?? 3;
+
+  Future<void> saveEmergencyFundMonths(int months) async {
+    await _prefs.setInt(_keyEmergencyFundMonths, months);
+    final firestore = _firestore;
+    final uid = _uid;
+    if (firestore == null || uid == null) return;
+    await _prefs.setBool(_keyPendingCloudSync, true);
+    _inFlightSyncs++;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveUserSettings(uid, emergencyFundMonths: months);
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      if (_inFlightSyncs == 0 && lastSyncError == null) {
+        await _prefs.setBool(_keyPendingCloudSync, false);
+        syncStatus.value = CloudSyncStatus.synced;
+      }
+    } catch (e) {
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+    }
+  }
+
+  bool loadEmergencyFundEnabled() =>
+      _prefs.getBool(_keyEmergencyFundEnabled) ?? true;
+
+  Future<void> saveEmergencyFundEnabled(bool enabled) async {
+    await _prefs.setBool(_keyEmergencyFundEnabled, enabled);
+    final firestore = _firestore;
+    final uid = _uid;
+    if (firestore == null || uid == null) return;
+    await _prefs.setBool(_keyPendingCloudSync, true);
+    _inFlightSyncs++;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveUserSettings(uid, emergencyFundEnabled: enabled);
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      if (_inFlightSyncs == 0 && lastSyncError == null) {
+        await _prefs.setBool(_keyPendingCloudSync, false);
+        syncStatus.value = CloudSyncStatus.synced;
+      }
+    } catch (e) {
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+    }
+  }
+
+  double loadSafetyCushion() => _prefs.getDouble(_keySafetyCushion) ?? 0.0;
+
+  Future<void> saveSafetyCushion(double amount) async {
+    await _prefs.setDouble(_keySafetyCushion, amount);
+    final firestore = _firestore;
+    final uid = _uid;
+    if (firestore == null || uid == null) return;
+    await _prefs.setBool(_keyPendingCloudSync, true);
+    _inFlightSyncs++;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveUserSettings(uid, safetyCushion: amount);
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      if (_inFlightSyncs == 0 && lastSyncError == null) {
+        await _prefs.setBool(_keyPendingCloudSync, false);
+        syncStatus.value = CloudSyncStatus.synced;
+      }
+    } catch (e) {
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+    }
+  }
+
+  List<String> loadSurplusGoalOrder() {
+    final raw = _prefs.getString(_keySurplusGoalOrder);
+    if (raw == null) return List<String>.from(CloudSnapshot.defaultSurplusGoalOrder);
+    try {
+      final list = jsonDecode(raw) as List;
+      final parsed = list.whereType<String>().toList();
+      return parsed.isEmpty
+          ? List<String>.from(CloudSnapshot.defaultSurplusGoalOrder)
+          : parsed;
+    } catch (_) {
+      return List<String>.from(CloudSnapshot.defaultSurplusGoalOrder);
+    }
+  }
+
+  Future<void> saveSurplusGoalOrder(List<String> order) async {
+    await _prefs.setString(_keySurplusGoalOrder, jsonEncode(order));
+    final firestore = _firestore;
+    final uid = _uid;
+    if (firestore == null || uid == null) return;
+    await _prefs.setBool(_keyPendingCloudSync, true);
+    _inFlightSyncs++;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveUserSettings(uid, surplusGoalOrder: order);
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      if (_inFlightSyncs == 0 && lastSyncError == null) {
+        await _prefs.setBool(_keyPendingCloudSync, false);
+        syncStatus.value = CloudSyncStatus.synced;
+      }
+    } catch (e) {
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+    }
+  }
+
+  bool loadIncludeExtraDebtGoal() =>
+      _prefs.getBool(_keyIncludeExtraDebtGoal) ?? false;
+
+  Future<void> saveIncludeExtraDebtGoal(bool include) async {
+    await _prefs.setBool(_keyIncludeExtraDebtGoal, include);
+    final firestore = _firestore;
+    final uid = _uid;
+    if (firestore == null || uid == null) return;
+    await _prefs.setBool(_keyPendingCloudSync, true);
+    _inFlightSyncs++;
+    syncStatus.value = CloudSyncStatus.syncing;
+    lastSyncError = null;
+    try {
+      await firestore.saveUserSettings(uid, includeExtraDebtGoal: include);
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      if (_inFlightSyncs == 0 && lastSyncError == null) {
+        await _prefs.setBool(_keyPendingCloudSync, false);
+        syncStatus.value = CloudSyncStatus.synced;
+      }
+    } catch (e) {
+      _inFlightSyncs = (_inFlightSyncs - 1).clamp(0, 9999);
+      lastSyncError = e.toString();
+      syncStatus.value = CloudSyncStatus.error;
+    }
+  }
+
   Future<void> clearAllData() async {
     await saveAccounts([]);
     await saveTransactions([]);
@@ -339,6 +577,13 @@ class StorageService {
     await savePayOccurrences([]);
     await saveInstallmentPlans([]);
     await saveImportedStatements([]);
+    await saveCategories([]);
+    await saveFundingPriorityIds([]);
+    await saveEmergencyFundMonths(3);
+    await saveEmergencyFundEnabled(true);
+    await saveSafetyCushion(0.0);
+    await saveSurplusGoalOrder(CloudSnapshot.defaultSurplusGoalOrder);
+    await saveIncludeExtraDebtGoal(false);
   }
 
   String exportBackupJson() {
@@ -355,6 +600,13 @@ class StorageService {
       'payOccurrences': loadPayOccurrences().map((e) => e.toJson()).toList(),
       'installmentPlans': loadInstallmentPlans().map((e) => e.toJson()).toList(),
       'importedStatements': loadImportedStatements().map((e) => e.toJson()).toList(),
+      'categories': loadCategories().map((e) => e.toJson()).toList(),
+      'fundingPriorityIds': loadFundingPriorityIds(),
+      'emergencyFundMonths': loadEmergencyFundMonths(),
+      'emergencyFundEnabled': loadEmergencyFundEnabled(),
+      'safetyCushion': loadSafetyCushion(),
+      'surplusGoalOrder': loadSurplusGoalOrder(),
+      'includeExtraDebtGoal': loadIncludeExtraDebtGoal(),
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
   }
@@ -392,6 +644,25 @@ class StorageService {
       final importedStatements = (decoded['importedStatements'] as List? ?? [])
           .map((e) => ImportedStatement.fromJson(e as Map<String, dynamic>))
           .toList();
+      final categories = (decoded['categories'] as List? ?? [])
+          .map((e) => MovementCategory.fromJson(e as Map<String, dynamic>))
+          .toList();
+      final fundingPriorityIds =
+          (decoded['fundingPriorityIds'] as List? ?? [])
+              .whereType<String>()
+              .toList();
+      final emergencyFundMonths =
+          (decoded['emergencyFundMonths'] as num?)?.toInt() ?? 3;
+      final emergencyFundEnabled =
+          (decoded['emergencyFundEnabled'] as bool?) ?? true;
+      final safetyCushion =
+          (decoded['safetyCushion'] as num?)?.toDouble() ?? 0.0;
+      final rawGoalOrder = decoded['surplusGoalOrder'];
+      final surplusGoalOrder = rawGoalOrder is List && rawGoalOrder.isNotEmpty
+          ? rawGoalOrder.whereType<String>().toList()
+          : List<String>.from(CloudSnapshot.defaultSurplusGoalOrder);
+      final includeExtraDebtGoal =
+          (decoded['includeExtraDebtGoal'] as bool?) ?? false;
 
       final snapshot = CloudSnapshot(
         accounts: accounts,
@@ -404,6 +675,13 @@ class StorageService {
         payOccurrences: payOccurrences,
         installmentPlans: installmentPlans,
         importedStatements: importedStatements,
+        categories: categories,
+        fundingPriorityIds: fundingPriorityIds,
+        emergencyFundMonths: emergencyFundMonths,
+        emergencyFundEnabled: emergencyFundEnabled,
+        safetyCushion: safetyCushion,
+        surplusGoalOrder: surplusGoalOrder,
+        includeExtraDebtGoal: includeExtraDebtGoal,
       );
 
       await _writeLocalOnly(snapshot);

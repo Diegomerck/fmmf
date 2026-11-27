@@ -29,6 +29,20 @@ Future<void> downloadJsonFile(String filename, String content) async {
   html.Url.revokeObjectUrl(url);
 }
 
+Future<bool> openExternalDownloadUrl(String url, {String? filename}) async {
+  final anchor = html.AnchorElement(href: url)
+    ..target = '_blank'
+    ..rel = 'noopener noreferrer'
+    ..style.display = 'none';
+  if (filename != null && filename.isNotEmpty) {
+    anchor.setAttribute('download', filename);
+  }
+  html.document.body?.append(anchor);
+  anchor.click();
+  anchor.remove();
+  return true;
+}
+
 Future<String?> pickJsonFileContent() async {
   return pickTextFileContent(accept: '.json,application/json');
 }

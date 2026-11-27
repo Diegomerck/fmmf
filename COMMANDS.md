@@ -8,20 +8,26 @@ Practical command and workflow reference for **FMMF** (`Flutter 3.24.5` / `Dart 
 
 | Action | Command / Shortcut | Notes |
 | :--- | :--- | :--- |
-| **Run Web App (Persistent Data)** | `flutter run -d web-server --web-port=8080` | Open `http://localhost:8080` in your regular browser so `localStorage` persists day to day |
-| **Run Web App (Ephemeral Dev)** | `flutter run -d chrome` | Launches a temporary Chrome profile on a random port (does **not** persist `localStorage` across runs) |
+| **Run Web App (Auto-Launch Chrome)** | `flutter run -d chrome --web-port=8080` | Automatically opens Chrome with Hot Reload; signing in loads your data from Cloud Firestore |
+| **Run Web App (Headless Server)** | `flutter run -d web-server --web-port=8080` | Starts the server without launching Chrome; open `http://localhost:8080` manually in your regular browser |
+| **Preview Built Web App (Instant)** | `python3 -m http.server 8080 -d build/web` | Serves the production `build/web` bundle in <1s (no Hot Reload) |
 | **Hot Reload** | Press `r` | In the active `flutter run` terminal |
 | **Hot Restart** | Press `R` | Resets app state & picks up structural changes |
 | **Quit Dev Server** | Press `q` | Stops `flutter run` |
 | **Build Web (Production)** | `flutter build web --release` | Outputs static bundle to `build/web/` |
-| **Preview Built Web App** | `python3 -m http.server 8080 -d build/web` | Serves `build/web` at `http://localhost:8080` |
 | **Build Android APK** | `flutter build apk --release` | Requires JDK 17 + Android SDK |
+
+> **Local Dev Tips:**
+> - **Service Worker Cache:** If `localhost` shows an older build after rebuilding `build/web`, open DevTools → **Application → Service workers**, check **Bypass for network**, click **Unregister** on `flutter_service_worker.js`, and reload.
+> - **Restricted Wi-Fi:** On networks that block `.web.app` / `.firebaseapp.com`, sign in on `localhost` using **Email & Password** (Google Sign-In's popup uses `.firebaseapp.com`).
 
 ---
 
 ## 2. Release Workflows
 
 > **Current Status:** GitHub remote (`Diegomerck/fmmf`) and Firebase (`fmmf-finance`: Hosting, Auth, Firestore) are active.
+> - **Live App:** `https://fmmf-finance.web.app` (or `https://fmmf-finance.firebaseapp.com`)
+> - **GitHub Repo:** `https://github.com/Diegomerck/fmmf`
 
 ### `PUSH TO LIVE` (Public Release)
 1. Bump `version:` in `pubspec.yaml`.
@@ -30,13 +36,13 @@ Practical command and workflow reference for **FMMF** (`Flutter 3.24.5` / `Dart 
    ```bash
    flutter analyze && flutter build web --release
    ```
-4. Commit & push to GitHub *(once initialized)*:
+4. Commit & push to GitHub:
    ```bash
    git add -A && git commit -m "Release vX.Y.Z" && git push
    ```
-5. Deploy to Firebase Hosting *(once initialized)*:
+5. Deploy to Firebase Hosting:
    ```bash
-   firebase deploy --only hosting
+   npx -y firebase-tools@latest deploy --only hosting --project fmmf-finance
    ```
 
 ### `PUSH DISCRETE` (Silent / Maintenance Release)
@@ -46,7 +52,12 @@ Practical command and workflow reference for **FMMF** (`Flutter 3.24.5` / `Dart 
    ```bash
    flutter analyze && flutter build web --release
    ```
-4. Commit, push to GitHub, and deploy (`firebase deploy --only hosting`) *(once initialized)*.
+4. Commit, push to GitHub, and deploy (`npx -y firebase-tools@latest deploy --only hosting --project fmmf-finance`).
+
+### Deploy Firestore Rules Only
+```bash
+npx -y firebase-tools@latest deploy --only firestore:rules --project fmmf-finance
+```
 
 ---
 

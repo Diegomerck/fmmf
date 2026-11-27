@@ -75,6 +75,11 @@ service cloud.firestore {
         allow read, delete: if isOwner(userId);
         allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
       }
+
+      match /categories/{docId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && hasValidSubcollectionDoc(docId);
+      }
     }
 
     // ===============================================================

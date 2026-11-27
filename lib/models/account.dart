@@ -7,6 +7,8 @@ enum AccountType {
   investment,    // Stocks, ETFs, Crypto, Real Estate (GBM, Fintual, Bitso)
   creditCard,    // Credit lines (with cutoff and payment dates)
   cash,          // Physical cash
+  vouchers,      // Vales / beneficios restringidos (e.g., Vales de Despensa)
+  savingsFund,   // Fondo de Ahorro / Caja con fecha de liberación y multiplicador
 }
 
 enum AccountPurpose {
@@ -32,18 +34,45 @@ class Account {
   final String colorHex;
   final String iconCode;
   final AccountPurpose purpose;
+  final bool includeInGeneralFinances;
+  final List<String> allowedCategories;
+  final String restrictionNote;
+  final DateTime? releaseDate;
+  final double contributionMultiplier;
+  final String? releaseTargetAccountId;
 
   static AccountPurpose defaultPurposeForType(AccountType type) {
     switch (type) {
       case AccountType.savings:
       case AccountType.investment:
+      case AccountType.savingsFund:
         return AccountPurpose.protectedGoal;
       case AccountType.checking:
       case AccountType.yieldVault:
       case AccountType.cash:
       case AccountType.creditCard:
+      case AccountType.vouchers:
         return AccountPurpose.general;
     }
+  }
+
+  static bool defaultIncludeInGeneralFinances(AccountType type) {
+    switch (type) {
+      case AccountType.vouchers:
+      case AccountType.savingsFund:
+        return false;
+      case AccountType.checking:
+      case AccountType.savings:
+      case AccountType.yieldVault:
+      case AccountType.investment:
+      case AccountType.creditCard:
+      case AccountType.cash:
+        return true;
+    }
+  }
+
+  static double defaultMultiplierForType(AccountType type) {
+    return type == AccountType.savingsFund ? 2.0 : 1.0;
   }
 
   static const List<String> colorPaletteHex = [
@@ -89,7 +118,23 @@ class Account {
     this.colorHex = '#10B981',
     this.iconCode = 'account_balance_wallet',
     AccountPurpose? purpose,
-  }) : purpose = purpose ?? defaultPurposeForType(type);
+    bool? includeInGeneralFinances,
+    this.allowedCategories = const [],
+    this.restrictionNote = '',
+    this.releaseDate,
+    double? contributionMultiplier,
+    this.releaseTargetAccountId,
+  })  : purpose = purpose ?? defaultPurposeForType(type),
+        includeInGeneralFinances =
+            includeInGeneralFinances ?? defaultIncludeInGeneralFinances(type),
+        contributionMultiplier =
+            contributionMultiplier ?? defaultMultiplierForType(type);
+
+  /// Projected payout on liberation date (balance * multiplier).
+  double get projectedReleaseAmount {
+    final mult = contributionMultiplier > 0 ? contributionMultiplier : 1.0;
+    return balance * mult;
+  }
 
   /// Progress toward savings goal (0.0 to 1.0)
   double get goalProgress {
@@ -126,6 +171,14 @@ class Account {
     String? colorHex,
     String? iconCode,
     AccountPurpose? purpose,
+    bool? includeInGeneralFinances,
+    List<String>? allowedCategories,
+    String? restrictionNote,
+    DateTime? releaseDate,
+    bool clearReleaseDate = false,
+    double? contributionMultiplier,
+    String? releaseTargetAccountId,
+    bool clearReleaseTargetAccountId = false,
   }) {
     final nextType = type ?? this.type;
     return Account(
@@ -144,6 +197,14 @@ class Account {
       colorHex: colorHex ?? this.colorHex,
       iconCode: iconCode ?? this.iconCode,
       purpose: purpose ?? this.purpose,
+      includeInGeneralFinances: includeInGeneralFinances ?? this.includeInGeneralFinances,
+      allowedCategories: allowedCategories ?? this.allowedCategories,
+      restrictionNote: restrictionNote ?? this.restrictionNote,
+      releaseDate: clearReleaseDate ? null : (releaseDate ?? this.releaseDate),
+      contributionMultiplier: contributionMultiplier ?? this.contributionMultiplier,
+      releaseTargetAccountId: clearReleaseTargetAccountId
+          ? null
+          : (releaseTargetAccountId ?? this.releaseTargetAccountId),
     );
   }
 
@@ -163,14 +224,22 @@ class Account {
     'colorHex': colorHex,
     'iconCode': iconCode,
     'purpose': purpose.name,
+    'includeInGeneralFinances': includeInGeneralFinances,
+    'allowedCategories': allowedCategories,
+    'restrictionNote': restrictionNote,
+    'releaseDate': releaseDate?.toIso8601String(),
+    'contributionMultiplier': contributionMultiplier,
+    'releaseTargetAccountId': releaseTargetAccountId,
   };
 
   factory Account.fromJson(Map<String, dynamic> json) {
-    final type = AccountType.values.byName(json['type'] as String);
+    final typeName = json['type'] as String;
+    final type = AccountType.values.where((t) => t.name == typeName).firstOrNull ?? AccountType.checking;
     final rawPurpose = json['purpose'] as String?;
     final parsedPurpose = rawPurpose != null
         ? AccountPurpose.values.where((p) => p.name == rawPurpose).firstOrNull
         : null;
+    final rawCategories = (json['allowedCategories'] as List<dynamic>?) ?? const [];
     return Account(
       id: json['id'] as String,
       name: json['name'] as String,
@@ -189,6 +258,14 @@ class Account {
       colorHex: (json['colorHex'] as String?) ?? '#10B981',
       iconCode: (json['iconCode'] as String?) ?? 'account_balance_wallet',
       purpose: parsedPurpose ?? defaultPurposeForType(type),
+      includeInGeneralFinances: json['includeInGeneralFinances'] as bool?,
+      allowedCategories: rawCategories.map((e) => e.toString()).where((e) => e.isNotEmpty).toList(),
+      restrictionNote: (json['restrictionNote'] as String?) ?? '',
+      releaseDate: json['releaseDate'] != null
+          ? DateTime.parse(json['releaseDate'] as String)
+          : null,
+      contributionMultiplier: (json['contributionMultiplier'] as num?)?.toDouble(),
+      releaseTargetAccountId: json['releaseTargetAccountId'] as String?,
     );
   }
 }

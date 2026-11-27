@@ -98,6 +98,12 @@ flutter build ipa
 
 ## 📋 Notas de la Versión (Changelog)
 
+### v3.0.0+4
+- **Prioridad de Metas del Excedente (`Ajustes → Prioridad de Metas`):** Configura el orden de tus metas para tu dinero libre (*Fondo de Emergencia*, *Invertir y Crecer*, *Abono Extra a Tarjetas* opcional) y activa o desactiva el Fondo de Emergencia sin asumir pagos extra a tarjetas por defecto.
+- **Categorías Inteligentes (Gasto / Ingreso / Ambos + Palabras Clave):** Las categorías ahora pueden usarse en Gastos, Ingresos o Ambos, permiten configurar palabras clave editables en `Ajustes → Categorías de Movimientos`, y aprenden automáticamente al 3er uso para preseleccionar la categoría mientras escribes.
+- **Cuentas Flexibles (`Vales / Beneficios`, `Fondo de Ahorro` y Reglas Avanzadas):** Configura en cualquier cuenta si se incluye en tus finanzas generales (`Margen Libre`), qué categorías de gasto cubre (ej. `Supermercado` con sugerencias en Resumen), restricciones de comercio (ej. `Solo Chedraui`), fecha de liberación y multiplicador de aportaciones (ej. `2×` con registro de aportaciones de nómina y liberación a cuenta bancaria).
+- **Tarjetas de Crédito y UX:** Corrección de orden cronológico descendente en movimientos de tarjeta (cargos de hoy arriba y mensualidades futuras abajo), desglose claro del balance neto por banco y eliminación de desbordamientos visuales en pantallas compactas.
+
 ### v1.1.0+2
 - **Sincronización en la nube con Firebase:** Inicio de sesión con correo/contraseña y Google, respaldo automático en Cloud Firestore aislado por usuario y migración automática de datos locales.
 - **Indicador de sincronización en vivo:** Estado en barra superior y pestaña de Ajustes con opción de reintento inmediato.

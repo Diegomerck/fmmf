@@ -45,6 +45,10 @@ class _AccountsTabState extends State<AccountsTab> {
         return 'Crédito';
       case AccountType.cash:
         return 'Efectivo';
+      case AccountType.vouchers:
+        return 'Vales';
+      case AccountType.savingsFund:
+        return 'Fondo Ahorro';
     }
   }
 
@@ -61,6 +65,8 @@ class _AccountsTabState extends State<AccountsTab> {
         .where((a) => a.type == AccountType.checking || a.type == AccountType.cash)
         .toList();
     final creditCards = accounts.where((a) => a.type == AccountType.creditCard).toList();
+    final voucherAccounts = accounts.where((a) => a.type == AccountType.vouchers).toList();
+    final savingsFundAccounts = accounts.where((a) => a.type == AccountType.savingsFund).toList();
 
     // Case-insensitive grouping by Bank / Institution
     final Map<String, List<Account>> byBank = {};
@@ -219,6 +225,18 @@ class _AccountsTabState extends State<AccountsTab> {
               _buildSectionHeader('Tarjetas de Crédito (Deudas y Cortes)', Icons.credit_card_outlined, AppTheme.alertCoral),
               const SizedBox(height: 8),
               ...creditCards.map((a) => _buildCreditCardCard(context, a)),
+              const SizedBox(height: 18),
+            ],
+            if (voucherAccounts.isNotEmpty) ...[
+              _buildSectionHeader('Vales y Beneficios', Icons.confirmation_number_outlined, AppTheme.amberGold),
+              const SizedBox(height: 8),
+              ...voucherAccounts.map((a) => _buildAccountCard(context, a)),
+              const SizedBox(height: 18),
+            ],
+            if (savingsFundAccounts.isNotEmpty) ...[
+              _buildSectionHeader('Fondos / Cajas de Ahorro', Icons.lock_clock_outlined, AppTheme.electricCyan),
+              const SizedBox(height: 8),
+              ...savingsFundAccounts.map((a) => _buildAccountCard(context, a)),
             ],
           ],
         ],
@@ -330,6 +348,7 @@ class _AccountsTabState extends State<AccountsTab> {
   ) {
     double netBankBalance = 0;
     for (final a in bankAccounts) {
+      if (!a.includeInGeneralFinances) continue;
       if (a.type == AccountType.creditCard) {
         netBankBalance -= a.balance;
       } else {
@@ -436,6 +455,31 @@ class _AccountsTabState extends State<AccountsTab> {
               ),
             ],
           ),
+          const SizedBox(height: 6),
+          Builder(
+            builder: (_) {
+              final hasCredit = bankAccounts.any((a) => a.type == AccountType.creditCard);
+              final String summaryText;
+              if (netBankBalance < 0) {
+                summaryText =
+                    'Balance neto (débito + ahorro − tarjetas): ${CurrencyFormat.formatMXN(netBankBalance, includeDecimals: false)}. Si usaras tu dinero aquí para pagar tus tarjetas, faltarían ${CurrencyFormat.formatMXN(netBankBalance.abs(), includeDecimals: false)}.';
+              } else if (hasCredit) {
+                summaryText =
+                    'Balance neto (débito + ahorro − tarjetas): quedarían ${CurrencyFormat.formatMXN(netBankBalance, includeDecimals: false)} libres si liquidaras tus tarjetas de este banco.';
+              } else {
+                summaryText =
+                    'Balance neto total disponible en este banco.';
+              }
+              return Text(
+                summaryText,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppTheme.textSecondary,
+                  height: 1.3,
+                ),
+              );
+            },
+          ),
           const SizedBox(height: 12),
           ..._buildBankSubSections(context, bankAccounts),
         ],
@@ -476,6 +520,22 @@ class _AccountsTabState extends State<AccountsTab> {
       final sum = savings.fold<double>(0.0, (s, a) => s + a.balance);
       widgets.add(_buildSubHeader('Bolsas de ahorro', savings.length, sum, AppTheme.emeraldGreen));
       widgets.addAll(savings.map((a) => _buildAccountCard(context, a, showTypeBadge: false)));
+      widgets.add(const SizedBox(height: 8));
+    }
+
+    final vouchers = bankAccounts.where((a) => a.type == AccountType.vouchers).toList();
+    if (vouchers.isNotEmpty) {
+      final sum = vouchers.fold<double>(0.0, (s, a) => s + a.balance);
+      widgets.add(_buildSubHeader('Vales y beneficios', vouchers.length, sum, AppTheme.amberGold));
+      widgets.addAll(vouchers.map((a) => _buildAccountCard(context, a, showTypeBadge: false)));
+      widgets.add(const SizedBox(height: 8));
+    }
+
+    final funds = bankAccounts.where((a) => a.type == AccountType.savingsFund).toList();
+    if (funds.isNotEmpty) {
+      final sum = funds.fold<double>(0.0, (s, a) => s + a.balance);
+      widgets.add(_buildSubHeader('Fondo / Caja de ahorro', funds.length, sum, AppTheme.electricCyan));
+      widgets.addAll(funds.map((a) => _buildAccountCard(context, a, showTypeBadge: false)));
     }
 
     return widgets;
@@ -636,6 +696,76 @@ class _AccountsTabState extends State<AccountsTab> {
                                       'Tasa: ${CurrencyFormat.formatRate(acc.annualYieldRate)} anual (+${CurrencyFormat.formatMXN(acc.monthlyYieldGenerated, includeDecimals: false)}/mes)',
                                       style: const TextStyle(fontSize: 10.5, color: AppTheme.purpleGlow, fontWeight: FontWeight.w600),
                                     ),
+                                  ),
+                                ],
+                                if (!acc.includeInGeneralFinances ||
+                                    acc.allowedCategories.isNotEmpty ||
+                                    acc.restrictionNote.isNotEmpty) ...[
+                                  const SizedBox(height: 5),
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 4,
+                                    children: [
+                                      if (!acc.includeInGeneralFinances)
+                                        _buildTagChip('Excluida de Margen Libre', AppTheme.amberGold),
+                                      if (acc.restrictionNote.isNotEmpty)
+                                        _buildTagChip(acc.restrictionNote, AppTheme.electricCyan),
+                                      if (acc.allowedCategories.isNotEmpty)
+                                        _buildTagChip('Cubre: ${acc.allowedCategories.join(", ")}', AppTheme.emeraldGreen),
+                                    ],
+                                  ),
+                                ],
+                                if (acc.type == AccountType.savingsFund ||
+                                    acc.releaseDate != null ||
+                                    acc.contributionMultiplier != 1.0) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Al liberar${acc.releaseDate != null ? " (${acc.releaseDate!.day}/${acc.releaseDate!.month}/${acc.releaseDate!.year})" : ""}: ${CurrencyFormat.formatMXN(acc.projectedReleaseAmount)} (${acc.contributionMultiplier == acc.contributionMultiplier.roundToDouble() ? acc.contributionMultiplier.toStringAsFixed(0) : acc.contributionMultiplier}×)',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.electricCyan,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 4,
+                                    children: [
+                                      InkWell(
+                                        onTap: () => _showContributionDialog(context, acc),
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: AppTheme.emeraldGreen.withOpacity(0.16),
+                                            borderRadius: BorderRadius.circular(8),
+                                            border: Border.all(color: AppTheme.emeraldGreen.withOpacity(0.45)),
+                                          ),
+                                          child: const Text(
+                                            '+ Aportación',
+                                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.emeraldGreen),
+                                          ),
+                                        ),
+                                      ),
+                                      if (acc.balance > 0)
+                                        InkWell(
+                                          onTap: () => _showReleaseFundDialog(context, acc),
+                                          borderRadius: BorderRadius.circular(8),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                            decoration: BoxDecoration(
+                                              color: AppTheme.electricCyan.withOpacity(0.16),
+                                              borderRadius: BorderRadius.circular(8),
+                                              border: Border.all(color: AppTheme.electricCyan.withOpacity(0.45)),
+                                            ),
+                                            child: const Text(
+                                              'Liberar a cuenta',
+                                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.electricCyan),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 ],
                               ],
@@ -807,6 +937,143 @@ class _AccountsTabState extends State<AccountsTab> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTagChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
+      ),
+    );
+  }
+
+  void _showContributionDialog(BuildContext context, Account acc) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        title: Text('Confirmar aportación • ${acc.name}',
+            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Registra lo descontado en tu recibo de nómina. No se restará de tu cuenta bancaria.',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+              decoration: InputDecoration(
+                prefixText: '\$ ',
+                labelText: 'Monto aportado (MXN)',
+                filled: true,
+                fillColor: AppTheme.surface,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: AppTheme.textSecondary)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.emeraldGreen,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () async {
+              final amt = double.tryParse(ctrl.text.replaceAll(',', '').trim()) ?? 0.0;
+              Navigator.pop(ctx);
+              if (amt > 0) {
+                await widget.provider.addSavingsFundContribution(acc.id, amt);
+              }
+            },
+            child: const Text('Confirmar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showReleaseFundDialog(BuildContext context, Account acc) {
+    final targets = widget.provider.accounts
+        .where((a) => a.id != acc.id && a.type != AccountType.creditCard)
+        .toList();
+    String? selectedTarget = targets.any((a) => a.id == acc.releaseTargetAccountId)
+        ? acc.releaseTargetAccountId
+        : (targets.isNotEmpty ? targets.first.id : null);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.card,
+          title: Text('Liberar ${acc.name}',
+              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Aportado: ${CurrencyFormat.formatMXN(acc.balance)}\nTotal a depositar (${acc.contributionMultiplier}×): ${CurrencyFormat.formatMXN(acc.projectedReleaseAmount)}',
+                style: const TextStyle(fontSize: 13, color: Colors.white, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              if (targets.isNotEmpty)
+                DropdownButtonFormField<String>(
+                  value: selectedTarget,
+                  dropdownColor: AppTheme.card,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Depositar en cuenta',
+                    filled: true,
+                    fillColor: AppTheme.surface,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  items: targets
+                      .map((a) => DropdownMenuItem(
+                            value: a.id,
+                            child: Text('${a.name} (${a.institution})'),
+                          ))
+                      .toList(),
+                  onChanged: (v) => setDialogState(() => selectedTarget = v),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar', style: TextStyle(color: AppTheme.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.electricCyan,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await widget.provider.releaseSavingsFund(acc.id, targetAccountId: selectedTarget);
+              },
+              child: const Text('Liberar y Depositar'),
+            ),
+          ],
         ),
       ),
     );

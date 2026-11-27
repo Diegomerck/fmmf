@@ -49,6 +49,24 @@ class AuthService {
     return _auth.sendPasswordResetEmail(email: email.trim());
   }
 
+  /// Extracts `oobCode` from a Firebase reset URL or returns the raw code.
+  static String extractResetCode(String codeOrUrl) {
+    final trimmed = codeOrUrl.trim();
+    final uri = Uri.tryParse(trimmed);
+    final oob = uri?.queryParameters['oobCode'];
+    if (oob != null && oob.isNotEmpty) return oob;
+    return trimmed;
+  }
+
+  /// Confirms a password reset inside the app using the email link or `oobCode`.
+  Future<void> confirmPasswordReset({
+    required String codeOrUrl,
+    required String newPassword,
+  }) {
+    final code = extractResetCode(codeOrUrl);
+    return _auth.confirmPasswordReset(code: code, newPassword: newPassword);
+  }
+
   /// Signs out the current user.
   Future<void> signOut() => _auth.signOut();
 }

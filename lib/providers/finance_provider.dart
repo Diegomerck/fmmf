@@ -6,6 +6,7 @@ import '../models/savings_rule.dart';
 import '../models/recurring_income.dart';
 import '../models/credit_installment.dart';
 import '../models/imported_statement.dart';
+import '../models/movement_category.dart';
 import '../services/storage_service.dart';
 import '../services/advisor_engine.dart';
 
@@ -22,6 +23,18 @@ class FinanceProvider extends ChangeNotifier {
   List<ScheduledPayOccurrence> _payOccurrences = [];
   List<CreditInstallmentPlan> _installmentPlans = [];
   List<ImportedStatement> _importedStatements = [];
+  List<MovementCategory> _categories = [];
+  Map<String, int> _categoryKeywordCounts = {};
+  List<String> _fundingPriorityIds = [];
+  int _emergencyFundMonths = 3;
+  bool _emergencyFundEnabled = true;
+  double _safetyCushion = 0.0;
+  List<String> _surplusGoalOrder = const [
+    'emergencyFund',
+    'investAndGrow',
+    'payDebtExtra',
+  ];
+  bool _includeExtraDebtGoal = false;
 
   AdvisorAnalysis? _analysis;
 
@@ -39,6 +52,87 @@ class FinanceProvider extends ChangeNotifier {
   List<ScheduledPayOccurrence> get payOccurrences => _payOccurrences;
   List<CreditInstallmentPlan> get installmentPlans => _installmentPlans;
   List<ImportedStatement> get importedStatements => _importedStatements;
+  List<MovementCategory> get categories => _categories;
+  List<MovementCategory> get expenseCategories =>
+      _categories.where((c) => c.isExpense).toList();
+  List<MovementCategory> get incomeCategories =>
+      _categories.where((c) => c.isIncome).toList();
+  List<String> get fundingPriorityIds => _fundingPriorityIds;
+  int get emergencyFundMonths => _emergencyFundMonths;
+  bool get emergencyFundEnabled => _emergencyFundEnabled;
+  double get safetyCushion => _safetyCushion;
+  List<String> get surplusGoalOrder => _surplusGoalOrder;
+  bool get includeExtraDebtGoal => _includeExtraDebtGoal;
+
+  /// Non-credit-card accounts included in general finances, ordered by user's funding priority.
+  List<Account> get orderedFundingAccounts {
+    final candidates = _accounts
+        .where((a) => a.includeInGeneralFinances && a.type != AccountType.creditCard)
+        .toList();
+    final idxMap = <String, int>{
+      for (int i = 0; i < _fundingPriorityIds.length; i++)
+        _fundingPriorityIds[i]: i,
+    };
+    candidates.sort((a, b) {
+      final aIdx = idxMap[a.id];
+      final bIdx = idxMap[b.id];
+      if (aIdx != null && bIdx != null) return aIdx.compareTo(bIdx);
+      if (aIdx != null) return -1;
+      if (bIdx != null) return 1;
+      int defaultRank(Account acc) {
+        if (acc.purpose == AccountPurpose.debtPayment ||
+            acc.purpose == AccountPurpose.fixedExpenses) {
+          return 0;
+        }
+        if (acc.purpose == AccountPurpose.general) return 1;
+        if (acc.type == AccountType.investment) return 3;
+        return 2;
+      }
+
+      final r = defaultRank(a).compareTo(defaultRank(b));
+      if (r != 0) return r;
+      return b.balance.compareTo(a.balance);
+    });
+    return candidates;
+  }
+
+  MovementCategory? categoryByName(String name, {bool? isIncome}) {
+    final normalized = name.trim().toLowerCase();
+    for (final cat in _categories) {
+      if (isIncome == true && !cat.isIncome) continue;
+      if (isIncome == false && !cat.isExpense) continue;
+      if (cat.name.trim().toLowerCase() == normalized) return cat;
+    }
+    for (final cat in _categories) {
+      if (cat.name.trim().toLowerCase() == normalized) return cat;
+    }
+    return null;
+  }
+
+  /// Matches a movement description against user-configured & auto-learned category keywords.
+  /// Prefers the longest matching keyword so multi-word phrases (e.g. "uber eats") win over shorter ones.
+  MovementCategory? matchCategoryByKeywords(String description, {bool? isIncome}) {
+    final normalizedDesc = MovementCategory.normalizeText(description);
+    if (normalizedDesc.isEmpty) return null;
+
+    MovementCategory? bestCategory;
+    int bestLength = 0;
+
+    for (final cat in _categories) {
+      if (isIncome == true && !cat.isIncome) continue;
+      if (isIncome == false && !cat.isExpense) continue;
+      for (final rawKw in cat.keywords) {
+        final kw = MovementCategory.normalizeText(rawKw);
+        if (kw.isEmpty) continue;
+        final pattern = RegExp('(^|[^a-z0-9])${RegExp.escape(kw)}([^a-z0-9]|\$)');
+        if (pattern.hasMatch(normalizedDesc) && kw.length > bestLength) {
+          bestLength = kw.length;
+          bestCategory = cat;
+        }
+      }
+    }
+    return bestCategory;
+  }
 
   List<ScheduledPayOccurrence> getOccurrencesForIncome(String incomeId) {
     final list = _payOccurrences.where((o) => o.incomeId == incomeId).toList();
@@ -85,6 +179,18 @@ class FinanceProvider extends ChangeNotifier {
     _payOccurrences = _storage.loadPayOccurrences();
     _installmentPlans = _storage.loadInstallmentPlans();
     _importedStatements = _storage.loadImportedStatements();
+    _categories = _storage.loadCategories();
+    if (_categories.isEmpty) {
+      _categories = MovementCategory.defaultCategories();
+      _storage.saveCategories(_categories);
+    }
+    _categoryKeywordCounts = _storage.loadCategoryKeywordCounts();
+    _fundingPriorityIds = _storage.loadFundingPriorityIds();
+    _emergencyFundMonths = _storage.loadEmergencyFundMonths();
+    _emergencyFundEnabled = _storage.loadEmergencyFundEnabled();
+    _safetyCushion = _storage.loadSafetyCushion();
+    _surplusGoalOrder = _storage.loadSurplusGoalOrder();
+    _includeExtraDebtGoal = _storage.loadIncludeExtraDebtGoal();
 
     // Remove any legacy pending transfers mistakenly triggered by credit card payments/abonos
     final beforePtCount = _pendingTransfers.length;
@@ -115,6 +221,10 @@ class FinanceProvider extends ChangeNotifier {
       installmentPlans: _installmentPlans,
       recurringIncomes: _recurringIncomes,
       scheduledOccurrences: _payOccurrences,
+      fundingPriorityIds: _fundingPriorityIds,
+      emergencyFundMonths: _emergencyFundMonths,
+      emergencyFundEnabled: _emergencyFundEnabled,
+      safetyCushion: _safetyCushion,
     );
     notifyListeners();
   }
@@ -301,7 +411,16 @@ class FinanceProvider extends ChangeNotifier {
     MovementType type = MovementType.expense;
     String category = 'Varios';
 
-    if (titleLower.contains('sueldo') ||
+    final matchedExpenseCat = matchCategoryByKeywords(title, isIncome: false);
+    final matchedIncomeCat = matchCategoryByKeywords(title, isIncome: true);
+
+    if (matchedIncomeCat != null && matchedExpenseCat == null) {
+      type = MovementType.income;
+      category = matchedIncomeCat.name;
+    } else if (matchedExpenseCat != null) {
+      type = MovementType.expense;
+      category = matchedExpenseCat.name;
+    } else if (titleLower.contains('sueldo') ||
         titleLower.contains('nómina') ||
         titleLower.contains('nomina') ||
         titleLower.contains('ingreso') ||
@@ -369,6 +488,64 @@ class FinanceProvider extends ChangeNotifier {
     _accounts.removeWhere((a) => a.id == accountId);
     await _storage.saveAccounts(_accounts);
     _recalculate();
+  }
+
+  /// Records a confirmed pay-stub contribution to a Fondo de Ahorro / locked fund
+  /// without touching bank liquidity (already deducted from gross payroll).
+  Future<void> addSavingsFundContribution(String accountId, double amount) async {
+    if (amount <= 0) return;
+    final idx = _accounts.indexWhere((a) => a.id == accountId);
+    if (idx == -1) return;
+    final acc = _accounts[idx];
+    _accounts[idx] = acc.copyWith(balance: acc.balance + amount);
+    await _storage.saveAccounts(_accounts);
+    _recalculate();
+  }
+
+  /// Liberates a Fondo de Ahorro: multiplies accumulated balance by [contributionMultiplier],
+  /// deposits the total into [targetAccountId] (or [acc.releaseTargetAccountId]),
+  /// and resets the fund balance to 0 for the next cycle.
+  Future<void> releaseSavingsFund(String accountId, {String? targetAccountId}) async {
+    final idx = _accounts.indexWhere((a) => a.id == accountId);
+    if (idx == -1) return;
+    final acc = _accounts[idx];
+    final payout = acc.projectedReleaseAmount;
+    final destId = targetAccountId ?? acc.releaseTargetAccountId;
+
+    _accounts[idx] = acc.copyWith(balance: 0.0);
+    await _storage.saveAccounts(_accounts);
+
+    if (destId != null && payout > 0 && _accounts.any((a) => a.id == destId)) {
+      await addTransaction(
+        title: 'Liberación ${acc.name}',
+        amount: payout,
+        type: MovementType.income,
+        category: 'Fondo de Ahorro',
+        accountId: destId,
+        date: DateTime.now(),
+        triggerSavingsRules: false,
+      );
+    } else {
+      _recalculate();
+    }
+  }
+
+  /// Estimates average monthly spending for a category over up to the last 90 days.
+  double averageMonthlySpendForCategory(String categoryName) {
+    final target = categoryName.trim().toLowerCase();
+    if (target.isEmpty) return 0.0;
+    final now = DateTime.now();
+    final cutoff = now.subtract(const Duration(days: 90));
+    final matching = _transactions.where((t) =>
+        t.type == MovementType.expense &&
+        t.category.trim().toLowerCase() == target &&
+        !t.date.isBefore(cutoff)).toList();
+    if (matching.isEmpty) return 0.0;
+    final total = matching.fold<double>(0.0, (s, t) => s + t.amount);
+    final earliest = matching.map((t) => t.date).reduce((a, b) => a.isBefore(b) ? a : b);
+    final spanDays = now.difference(earliest).inDays.clamp(1, 90);
+    final months = (spanDays / 30.0).clamp(1.0, 3.0);
+    return total / months;
   }
 
   Future<void> renameOrMergeBank(String fromBank, String toBank) async {
@@ -1285,6 +1462,161 @@ class FinanceProvider extends ChangeNotifier {
     await _storage.saveTransactions(_transactions);
     await _storage.saveImportedStatements(_importedStatements);
     _recalculate();
+  }
+
+  // --- CATEGORY MANAGEMENT ---
+  Future<void> addCategory(MovementCategory category) async {
+    _categories.add(category);
+    await _storage.saveCategories(_categories);
+    notifyListeners();
+  }
+
+  Future<void> updateCategory(MovementCategory updated) async {
+    final idx = _categories.indexWhere((c) => c.id == updated.id);
+    if (idx == -1) return;
+    final old = _categories[idx];
+    _categories[idx] = updated;
+    await _storage.saveCategories(_categories);
+
+    if (old.name != updated.name) {
+      bool txChanged = false;
+      _transactions = _transactions.map((tx) {
+        if (tx.category == old.name) {
+          txChanged = true;
+          return tx.copyWith(category: updated.name);
+        }
+        return tx;
+      }).toList();
+      if (txChanged) {
+        await _storage.saveTransactions(_transactions);
+      }
+    }
+    _recalculate();
+  }
+
+  Future<void> deleteCategory(String categoryId) async {
+    _categories.removeWhere((c) => c.id == categoryId);
+    _categoryKeywordCounts.removeWhere((k, _) => k.startsWith('$categoryId::'));
+    await _storage.saveCategories(_categories);
+    await _storage.saveCategoryKeywordCounts(_categoryKeywordCounts);
+    notifyListeners();
+  }
+
+  Future<void> addKeywordToCategory(String categoryId, String rawKeyword) async {
+    final kw = MovementCategory.normalizeText(rawKeyword);
+    if (kw.isEmpty) return;
+    final idx = _categories.indexWhere((c) => c.id == categoryId);
+    if (idx == -1) return;
+    final cat = _categories[idx];
+    if (cat.keywords.contains(kw)) return;
+    _categories[idx] = cat.copyWith(keywords: [...cat.keywords, kw]);
+    await _storage.saveCategories(_categories);
+    notifyListeners();
+  }
+
+  Future<void> removeKeywordFromCategory(String categoryId, String rawKeyword) async {
+    final kw = MovementCategory.normalizeText(rawKeyword);
+    final idx = _categories.indexWhere((c) => c.id == categoryId);
+    if (idx == -1) return;
+    final cat = _categories[idx];
+    final next = cat.keywords.where((k) => k != kw).toList();
+    if (next.length == cat.keywords.length) return;
+    _categories[idx] = cat.copyWith(keywords: next);
+    await _storage.saveCategories(_categories);
+    notifyListeners();
+  }
+
+  /// Tracks word -> category usage and automatically promotes a word to a category keyword
+  /// once the user pairs them [autoLearnThreshold] times (default 3).
+  /// Returns the list of newly learned keywords.
+  Future<List<String>> recordCategoryUsageAndAutoLearn({
+    required String description,
+    required String categoryName,
+    required bool isIncome,
+    int autoLearnThreshold = 3,
+  }) async {
+    final cat = categoryByName(categoryName, isIncome: isIncome);
+    if (cat == null) return const [];
+
+    final words = MovementCategory.extractCandidateWords(description);
+    if (words.isEmpty) return const [];
+
+    final existingScopeKeywords = _categories
+        .where((c) => isIncome ? c.isIncome : c.isExpense)
+        .expand((c) => c.keywords)
+        .toSet();
+
+    final learned = <String>[];
+    bool countsChanged = false;
+    final updatedKeywords = List<String>.from(cat.keywords);
+
+    for (final word in words) {
+      if (existingScopeKeywords.contains(word) || updatedKeywords.contains(word)) {
+        continue;
+      }
+      final key = '${cat.id}::$word';
+      final nextCount = (_categoryKeywordCounts[key] ?? 0) + 1;
+      countsChanged = true;
+      if (nextCount >= autoLearnThreshold) {
+        updatedKeywords.add(word);
+        _categoryKeywordCounts.remove(key);
+        learned.add(word);
+      } else {
+        _categoryKeywordCounts[key] = nextCount;
+      }
+    }
+
+    if (learned.isNotEmpty) {
+      final idx = _categories.indexWhere((c) => c.id == cat.id);
+      if (idx != -1) {
+        _categories[idx] = cat.copyWith(keywords: updatedKeywords);
+        await _storage.saveCategories(_categories);
+      }
+    }
+    if (countsChanged) {
+      await _storage.saveCategoryKeywordCounts(_categoryKeywordCounts);
+    }
+    if (learned.isNotEmpty) {
+      notifyListeners();
+    }
+    return learned;
+  }
+
+  // --- FUNDING PRIORITY & USER GOALS ---
+  Future<void> updateFundingPriority(List<String> orderedIds) async {
+    _fundingPriorityIds = List<String>.from(orderedIds);
+    await _storage.saveFundingPriorityIds(_fundingPriorityIds);
+    _recalculate();
+  }
+
+  Future<void> updateEmergencyFundMonths(int months) async {
+    _emergencyFundMonths = months.clamp(1, 24);
+    await _storage.saveEmergencyFundMonths(_emergencyFundMonths);
+    _recalculate();
+  }
+
+  Future<void> updateEmergencyFundEnabled(bool enabled) async {
+    _emergencyFundEnabled = enabled;
+    await _storage.saveEmergencyFundEnabled(enabled);
+    _recalculate();
+  }
+
+  Future<void> updateSafetyCushion(double amount) async {
+    _safetyCushion = amount < 0 ? 0.0 : amount;
+    await _storage.saveSafetyCushion(_safetyCushion);
+    _recalculate();
+  }
+
+  Future<void> updateSurplusGoalOrder(List<String> order) async {
+    _surplusGoalOrder = List<String>.from(order);
+    await _storage.saveSurplusGoalOrder(_surplusGoalOrder);
+    notifyListeners();
+  }
+
+  Future<void> updateIncludeExtraDebtGoal(bool include) async {
+    _includeExtraDebtGoal = include;
+    await _storage.saveIncludeExtraDebtGoal(include);
+    notifyListeners();
   }
 
   // --- BACKUP & RESET ---

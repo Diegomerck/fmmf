@@ -441,16 +441,21 @@ class PlanTab extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Row(
-              children: [
-                Icon(Icons.timeline_rounded, size: 18, color: AppTheme.electricCyan),
-                SizedBox(width: 8),
-                Text(
-                  'Proyección Mensual (12 Meses)',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
-                ),
-              ],
+            const Expanded(
+              child: Row(
+                children: [
+                  Icon(Icons.timeline_rounded, size: 18, color: AppTheme.electricCyan),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Proyección Mensual (12 Meses)',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
             ),
+            const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(

@@ -49,6 +49,10 @@ class _AuthScreenState extends State<AuthScreen> {
           return 'Se cerró la ventana de inicio de sesión antes de completar.';
         case 'unauthorized-domain':
           return 'Este dominio aún no está autorizado en Firebase Auth.';
+        case 'expired-action-code':
+          return 'El enlace o código de recuperación ya expiró. Solicita uno nuevo.';
+        case 'invalid-action-code':
+          return 'El enlace o código de recuperación no es válido o ya fue usado.';
         default:
           return e.message ?? 'No se pudo iniciar sesión (${e.code}).';
       }
@@ -123,7 +127,8 @@ class _AuthScreenState extends State<AuthScreen> {
       await widget.authService.sendPasswordResetEmail(email);
       if (mounted) {
         setState(() {
-          _infoMessage = 'Enviamos un enlace de recuperación a $email.';
+          _infoMessage =
+              'Enviamos un correo a $email. Si tu red bloquea el enlace, copia la dirección del enlace del correo y usa "Restablecer con enlace o código".';
         });
       }
     } catch (e) {
@@ -134,6 +139,139 @@ class _AuthScreenState extends State<AuthScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  Future<void> _showInAppResetDialog() async {
+    final codeCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool submitting = false;
+    bool obscure = true;
+    String? dialogError;
+
+    final success = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.card,
+          title: const Text(
+            'Restablecer contraseña aquí',
+            style: TextStyle(color: Colors.white, fontSize: 16),
+          ),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Copia el enlace del correo (clic derecho → Copiar dirección del enlace) o pega el código oobCode y escribe tu nueva contraseña.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                if (dialogError != null) ...[
+                  Text(
+                    dialogError!,
+                    style: const TextStyle(
+                        color: AppTheme.alertCoral, fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                TextFormField(
+                  controller: codeCtrl,
+                  maxLines: 2,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    labelText: 'Enlace del correo o código',
+                    hintText: 'https://...oobCode=... o el código',
+                  ),
+                  validator: (val) {
+                    if (val == null || val.trim().isEmpty) {
+                      return 'Pega el enlace o código del correo';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: passCtrl,
+                  obscureText: obscure,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Nueva contraseña',
+                    suffixIcon: IconButton(
+                      icon: Icon(obscure
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined),
+                      onPressed: () =>
+                          setDialogState(() => obscure = !obscure),
+                    ),
+                  ),
+                  validator: (val) {
+                    if (val == null || val.length < 6) {
+                      return 'Mínimo 6 caracteres';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar',
+                  style: TextStyle(color: AppTheme.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.emeraldGreen,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setDialogState(() {
+                        submitting = true;
+                        dialogError = null;
+                      });
+                      try {
+                        await widget.authService.confirmPasswordReset(
+                          codeOrUrl: codeCtrl.text,
+                          newPassword: passCtrl.text,
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx, true);
+                      } catch (e) {
+                        setDialogState(() {
+                          submitting = false;
+                          dialogError = _mapAuthError(e);
+                        });
+                      }
+                    },
+              child: submitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.black),
+                    )
+                  : const Text('Guardar contraseña'),
+            ),
+          ],
+        ),
+      ),
+    );
+    codeCtrl.dispose();
+    passCtrl.dispose();
+
+    if (success == true && mounted) {
+      setState(() {
+        _errorMessage = null;
+        _infoMessage =
+            'Contraseña actualizada correctamente. Ya puedes iniciar sesión.';
+      });
     }
   }
 
@@ -326,15 +464,27 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                     ),
                     if (!_isRegisterMode) ...[
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: _isLoading ? null : _resetPassword,
-                          child: const Text(
-                            '¿Olvidaste tu contraseña?',
-                            style: TextStyle(fontSize: 12),
+                      Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
+                        children: [
+                          TextButton(
+                            onPressed:
+                                _isLoading ? null : _showInAppResetDialog,
+                            child: const Text(
+                              'Tengo enlace/código',
+                              style: TextStyle(fontSize: 12),
+                            ),
                           ),
-                        ),
+                          TextButton(
+                            onPressed: _isLoading ? null : _resetPassword,
+                            child: const Text(
+                              '¿Olvidaste tu contraseña?',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
                       ),
                     ] else
                       const SizedBox(height: 16),
