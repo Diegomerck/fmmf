@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/currency_format.dart';
 import '../../models/account.dart';
 import '../../models/credit_installment.dart';
 import '../../models/transaction.dart';
@@ -189,6 +190,52 @@ class _QuickEntrySheetState extends State<QuickEntrySheet> {
     }
 
     final selectedAcc = widget.provider.accounts.where((a) => a.id == _selectedAccountId).firstOrNull;
+    if (selectedAcc != null &&
+        selectedAcc.type != AccountType.creditCard &&
+        (_selectedType == MovementType.expense ||
+            _selectedType == MovementType.transfer)) {
+      final earmarkedGoals =
+          widget.provider.miniGoalsUsingAccount(selectedAcc.id);
+      if (earmarkedGoals.isNotEmpty) {
+        final totalEarmarked =
+            earmarkedGoals.fold<double>(0.0, (s, g) => s + g.savedAmount);
+        if (selectedAcc.balance - amount < totalEarmarked - 0.01) {
+          final names = earmarkedGoals.map((g) => g.name).join(', ');
+          final proceed = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: AppTheme.card,
+              title: const Text(
+                'Dinero apartado en esta cuenta',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+              content: Text(
+                'Tienes ${CurrencyFormat.formatMXN(totalEarmarked)} apartados en ${selectedAcc.name} para: $names.\n\nSi haces este movimiento, estarías usando ese dinero. ¿Seguro que quieres continuar?',
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 13),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancelar',
+                      style: TextStyle(color: AppTheme.textSecondary)),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.amberGold,
+                    foregroundColor: Colors.black,
+                  ),
+                  child: const Text('Sí, continuar'),
+                ),
+              ],
+            ),
+          );
+          if (proceed != true || !mounted) return;
+        }
+      }
+    }
+
     var effectiveDate = _selectedDate;
     if (_alreadyInBalance &&
         selectedAcc?.manualMonthlyDueAt != null &&

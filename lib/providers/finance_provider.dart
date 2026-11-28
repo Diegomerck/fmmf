@@ -7,6 +7,7 @@ import '../models/recurring_income.dart';
 import '../models/credit_installment.dart';
 import '../models/imported_statement.dart';
 import '../models/movement_category.dart';
+import '../models/mini_goal.dart';
 import '../services/storage_service.dart';
 import '../services/advisor_engine.dart';
 
@@ -35,6 +36,8 @@ class FinanceProvider extends ChangeNotifier {
     'payDebtExtra',
   ];
   bool _includeExtraDebtGoal = false;
+  bool _simpleMode = false;
+  List<MiniGoal> _miniGoals = [];
 
   AdvisorAnalysis? _analysis;
 
@@ -63,6 +66,8 @@ class FinanceProvider extends ChangeNotifier {
   double get safetyCushion => _safetyCushion;
   List<String> get surplusGoalOrder => _surplusGoalOrder;
   bool get includeExtraDebtGoal => _includeExtraDebtGoal;
+  bool get simpleMode => _simpleMode;
+  List<MiniGoal> get miniGoals => _miniGoals;
 
   /// Non-credit-card accounts included in general finances, ordered by user's funding priority.
   List<Account> get orderedFundingAccounts {
@@ -195,6 +200,8 @@ class FinanceProvider extends ChangeNotifier {
     _safetyCushion = _storage.loadSafetyCushion();
     _surplusGoalOrder = _storage.loadSurplusGoalOrder();
     _includeExtraDebtGoal = _storage.loadIncludeExtraDebtGoal();
+    _simpleMode = _storage.loadSimpleMode();
+    _miniGoals = _storage.loadMiniGoals();
 
     // Remove any legacy pending transfers mistakenly triggered by credit card payments/abonos
     final beforePtCount = _pendingTransfers.length;
@@ -250,6 +257,7 @@ class FinanceProvider extends ChangeNotifier {
       emergencyFundMonths: _emergencyFundMonths,
       emergencyFundEnabled: _emergencyFundEnabled,
       safetyCushion: _safetyCushion,
+      miniGoals: _miniGoals,
     );
     notifyListeners();
   }
@@ -1726,6 +1734,151 @@ class FinanceProvider extends ChangeNotifier {
     _includeExtraDebtGoal = include;
     await _storage.saveIncludeExtraDebtGoal(include);
     notifyListeners();
+  }
+
+  Future<void> toggleSimpleMode() async {
+    _simpleMode = !_simpleMode;
+    await _storage.saveSimpleMode(_simpleMode);
+    notifyListeners();
+  }
+
+  // --- MINI GOALS (SINKING FUNDS) ---
+  double earmarkedMiniGoalsForAccount(
+    String accountId, {
+    String? excludeGoalId,
+  }) {
+    return _miniGoals
+        .where((g) =>
+            !g.isCompleted &&
+            g.id != excludeGoalId &&
+            g.accountId == accountId &&
+            g.savedAmount > 0)
+        .fold<double>(0.0, (sum, g) => sum + g.savedAmount);
+  }
+
+  List<MiniGoal> miniGoalsUsingAccount(String accountId) {
+    return _miniGoals
+        .where((g) =>
+            !g.isCompleted && g.accountId == accountId && g.savedAmount > 0)
+        .toList();
+  }
+
+  Future<void> addMiniGoal(MiniGoal goal) async {
+    _miniGoals.add(goal);
+    await _storage.saveMiniGoals(_miniGoals);
+    _recalculate();
+  }
+
+  Future<void> updateMiniGoal(MiniGoal updated) async {
+    _miniGoals = _miniGoals.map((g) => g.id == updated.id ? updated : g).toList();
+    await _storage.saveMiniGoals(_miniGoals);
+    _recalculate();
+  }
+
+  Future<void> deleteMiniGoal(String id) async {
+    _miniGoals.removeWhere((g) => g.id == id);
+    await _storage.saveMiniGoals(_miniGoals);
+    _recalculate();
+  }
+
+  Future<void> addSavingsToMiniGoal(
+    String id,
+    double amount, {
+    String? fromAccountId,
+  }) async {
+    if (amount <= 0) return;
+    final goal = _miniGoals.where((g) => g.id == id).firstOrNull;
+    if (goal == null) return;
+    if (fromAccountId != null &&
+        fromAccountId.isNotEmpty &&
+        goal.accountId != null &&
+        goal.accountId!.isNotEmpty &&
+        fromAccountId != goal.accountId) {
+      await addTransaction(
+        title: 'Apartado: ${goal.name}',
+        amount: amount,
+        type: MovementType.transfer,
+        category: 'Mini-meta',
+        accountId: fromAccountId,
+        targetAccountId: goal.accountId,
+      );
+    }
+    _miniGoals = _miniGoals.map((g) {
+      if (g.id != id) return g;
+      return g.copyWith(
+        savedAmount: (g.savedAmount + amount).clamp(0.0, g.targetAmount),
+      );
+    }).toList();
+    await _storage.saveMiniGoals(_miniGoals);
+    _recalculate();
+  }
+
+  Future<void> markMiniGoalPaid(
+    MiniGoal goal, {
+    String? paidFromAccountId,
+    bool completeGoal = false,
+  }) async {
+    if (paidFromAccountId != null && paidFromAccountId.isNotEmpty) {
+      await addTransaction(
+        title: goal.name,
+        amount: goal.targetAmount,
+        type: MovementType.expense,
+        category: 'Mini-meta',
+        accountId: paidFromAccountId,
+      );
+    }
+    final nextHistory = [
+      ...goal.paymentHistory,
+      MiniGoalCycleRecord(
+        paidAt: DateTime.now(),
+        previousDueDate: goal.dueDate,
+        previousSavedAmount: goal.savedAmount,
+      ),
+    ];
+    final bool shouldComplete = completeGoal || !goal.hasNextCycleBeforeEnd;
+    final updated = shouldComplete
+        ? goal.copyWith(
+            isCompleted: true,
+            completedAt: DateTime.now(),
+            savedAmount: goal.targetAmount,
+            paymentHistory: nextHistory,
+          )
+        : goal.copyWith(
+            dueDate: goal.nextCycleDate(),
+            savedAmount: 0.0,
+            paymentHistory: nextHistory,
+          );
+    _miniGoals = _miniGoals.map((g) => g.id == goal.id ? updated : g).toList();
+    await _storage.saveMiniGoals(_miniGoals);
+    _recalculate();
+  }
+
+  Future<void> undoLastMiniGoalPayment(MiniGoal goal) async {
+    if (goal.paymentHistory.isEmpty) return;
+    final history = List<MiniGoalCycleRecord>.from(goal.paymentHistory);
+    final last = history.removeLast();
+    final restored = goal.copyWith(
+      dueDate: last.previousDueDate,
+      savedAmount: last.previousSavedAmount,
+      isCompleted: false,
+      clearCompletedAt: true,
+      paymentHistory: history,
+    );
+    _miniGoals = _miniGoals.map((g) => g.id == goal.id ? restored : g).toList();
+    await _storage.saveMiniGoals(_miniGoals);
+    _recalculate();
+  }
+
+  Future<void> reactivateMiniGoal(MiniGoal goal, {DateTime? newDueDate}) async {
+    final updated = goal.copyWith(
+      isCompleted: false,
+      clearCompletedAt: true,
+      savedAmount: 0.0,
+      dueDate: newDueDate ?? goal.dueDate,
+    );
+    _miniGoals = _miniGoals.map((g) => g.id == goal.id ? updated : g).toList();
+    await _storage.saveMiniGoals(_miniGoals);
+    _recalculate();
   }
 
   // --- BACKUP & RESET ---

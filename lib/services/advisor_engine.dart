@@ -4,6 +4,7 @@ import '../models/budget_commitment.dart';
 import '../models/financial_insight.dart';
 import '../models/credit_installment.dart';
 import '../models/recurring_income.dart';
+import '../models/mini_goal.dart';
 
 class FundingSuggestion {
   final String accountId;
@@ -99,6 +100,27 @@ class CashflowTimelineEvent {
   });
 }
 
+class GoalTimelineEstimate {
+  final double targetAmount;
+  final double? monthsToGoal;
+  final DateTime? estimatedCompletionDate;
+  final double expectedMonthlyIncome;
+  final double estimatedMonthlySpend;
+  final double estimatedMonthlySavings;
+
+  const GoalTimelineEstimate({
+    required this.targetAmount,
+    required this.monthsToGoal,
+    required this.estimatedCompletionDate,
+    required this.expectedMonthlyIncome,
+    required this.estimatedMonthlySpend,
+    required this.estimatedMonthlySavings,
+  });
+
+  bool get canReachGoal =>
+      targetAmount <= 0 || (monthsToGoal != null && monthsToGoal! > 0);
+}
+
 class AdvisorAnalysis {
   final double netWorth;
   final double totalAssets;
@@ -133,6 +155,10 @@ class AdvisorAnalysis {
   final DateTime? lowestTimelineDate;
   final double obligationsBeforeNextPayday;
   final DateTime? nextPaydayDate;
+  final double averageMonthlyVariableSpend;
+  final double estimatedMonthlyIncome;
+  final double estimatedMonthlyTotalSpend;
+  final double estimatedMonthlySavingsCapacity;
   final List<FinancialInsight> insights;
 
   const AdvisorAnalysis({
@@ -169,8 +195,124 @@ class AdvisorAnalysis {
     this.lowestTimelineDate,
     this.obligationsBeforeNextPayday = 0.0,
     this.nextPaydayDate,
+    this.averageMonthlyVariableSpend = 0.0,
+    this.estimatedMonthlyIncome = 0.0,
+    this.estimatedMonthlyTotalSpend = 0.0,
+    this.estimatedMonthlySavingsCapacity = 0.0,
     required this.insights,
   });
+
+  /// Estimates how many months it will take to accumulate [targetAmount]
+  /// using this month's projected buffer plus future monthly projections.
+  /// Set [includeVariableSpend] to false for the disciplined/commitments-only scenario.
+  GoalTimelineEstimate estimateTimelineForTarget(
+    double targetAmount, {
+    bool includeVariableSpend = true,
+    DateTime? referenceDate,
+  }) {
+    final now = referenceDate ?? DateTime.now();
+    final double variableSpend =
+        includeVariableSpend ? averageMonthlyVariableSpend : 0.0;
+    final double scenarioMonthlySpend = includeVariableSpend
+        ? estimatedMonthlyTotalSpend
+        : (estimatedMonthlyTotalSpend - averageMonthlyVariableSpend)
+            .clamp(0.0, double.infinity);
+    final double scenarioMonthlySavings =
+        estimatedMonthlyIncome - scenarioMonthlySpend;
+
+    if (targetAmount <= 0) {
+      return GoalTimelineEstimate(
+        targetAmount: 0.0,
+        monthsToGoal: 0.0,
+        estimatedCompletionDate: DateTime(now.year, now.month, 1),
+        expectedMonthlyIncome: estimatedMonthlyIncome,
+        estimatedMonthlySpend: scenarioMonthlySpend,
+        estimatedMonthlySavings: scenarioMonthlySavings,
+      );
+    }
+
+    double remaining = targetAmount;
+    double elapsedMonths = 0.0;
+
+    // Month 0: remaining surplus from the current month (if positive)
+    if (projectedEndOfMonthBuffer > 0) {
+      if (projectedEndOfMonthBuffer >= remaining) {
+        final fraction = (remaining / projectedEndOfMonthBuffer).clamp(0.1, 1.0);
+        return GoalTimelineEstimate(
+          targetAmount: targetAmount,
+          monthsToGoal: fraction,
+          estimatedCompletionDate: DateTime(now.year, now.month, 1),
+          expectedMonthlyIncome: estimatedMonthlyIncome,
+          estimatedMonthlySpend: scenarioMonthlySpend,
+          estimatedMonthlySavings: scenarioMonthlySavings,
+        );
+      }
+      remaining -= projectedEndOfMonthBuffer;
+      elapsedMonths = 1.0;
+    }
+
+    // Future months 1..11 from detailed projections
+    final futureMonths = monthlyProjections.skip(1).toList();
+    for (final proj in futureMonths) {
+      final netSavings =
+          proj.expectedIncome - proj.totalObligations - variableSpend;
+      if (netSavings > 0) {
+        if (netSavings >= remaining) {
+          final exactMonths = elapsedMonths + (remaining / netSavings);
+          final targetDate =
+              DateTime(now.year, now.month + exactMonths.ceil(), 1);
+          return GoalTimelineEstimate(
+            targetAmount: targetAmount,
+            monthsToGoal: exactMonths,
+            estimatedCompletionDate: targetDate,
+            expectedMonthlyIncome: estimatedMonthlyIncome,
+            estimatedMonthlySpend: scenarioMonthlySpend,
+            estimatedMonthlySavings: scenarioMonthlySavings,
+          );
+        }
+        remaining -= netSavings;
+      }
+      elapsedMonths += 1.0;
+    }
+
+    // Beyond 11 months: use steady-state monthly capacity (fixed commitments + variable spend)
+    final double steadyFixed = totalMonthlyCommitments;
+    final double steadyNet =
+        estimatedMonthlyIncome - steadyFixed - variableSpend;
+    if (steadyNet <= 0) {
+      return GoalTimelineEstimate(
+        targetAmount: targetAmount,
+        monthsToGoal: null,
+        estimatedCompletionDate: null,
+        expectedMonthlyIncome: estimatedMonthlyIncome,
+        estimatedMonthlySpend: scenarioMonthlySpend,
+        estimatedMonthlySavings: scenarioMonthlySavings,
+      );
+    }
+
+    final extraMonths = remaining / steadyNet;
+    final totalMonths = elapsedMonths + extraMonths;
+    if (totalMonths > 120) {
+      return GoalTimelineEstimate(
+        targetAmount: targetAmount,
+        monthsToGoal: null,
+        estimatedCompletionDate: null,
+        expectedMonthlyIncome: estimatedMonthlyIncome,
+        estimatedMonthlySpend: scenarioMonthlySpend,
+        estimatedMonthlySavings: scenarioMonthlySavings,
+      );
+    }
+
+    return GoalTimelineEstimate(
+      targetAmount: targetAmount,
+      monthsToGoal: totalMonths,
+      estimatedCompletionDate:
+          DateTime(now.year, now.month + totalMonths.ceil(), 1),
+      expectedMonthlyIncome: estimatedMonthlyIncome,
+      estimatedMonthlySpend: scenarioMonthlySpend,
+      estimatedMonthlySavings: scenarioMonthlySavings,
+    );
+  }
 }
 
 class AdvisorEngine {
@@ -186,6 +328,7 @@ class AdvisorEngine {
     int emergencyFundMonths = 3,
     bool emergencyFundEnabled = true,
     double safetyCushion = 0.0, // Optional reserve cushion in MXN (0 by default)
+    List<MiniGoal> miniGoals = const [],
   }) {
     final Map<String, Account> accountById = {
       for (final acc in accounts) acc.id: acc,
@@ -252,6 +395,7 @@ class AdvisorEngine {
     final double annualPassiveRunRate = monthlyPassiveYield * 12.0;
 
     // 2. Commitments (split into paid, pending cash/debit, and pending credit-card autopay)
+    final now = DateTime.now();
     double pendingCashCommitments = 0.0;
     double pendingCardCommitments = 0.0;
     double paidCommitmentsThisMonth = 0.0;
@@ -277,6 +421,38 @@ class AdvisorEngine {
         } else {
           pendingCashCommitments += c.amount;
           pendingCashCommitmentItems.add(item);
+        }
+      }
+    }
+    for (final g in miniGoals) {
+      if (g.isCompleted) continue;
+      if (g.dueDate.year == now.year &&
+          g.dueDate.month == now.month &&
+          g.remainingToSave > 0) {
+        pendingCashCommitments += g.remainingToSave;
+        pendingCashCommitmentItems.add(
+          ProjectionLineItem(
+            title: g.name,
+            subtitle: 'Mini-meta • Día ${g.dueDate.day}',
+            amount: g.remainingToSave,
+          ),
+        );
+      }
+      // Reserve earmarked savings sitting inside general liquid accounts so it isn't spent twice
+      if (g.savedAmount > 0 && g.accountId != null) {
+        final acc = accountById[g.accountId];
+        if (acc != null &&
+            acc.includeInGeneralFinances &&
+            acc.type != AccountType.creditCard &&
+            acc.purpose != AccountPurpose.protectedGoal) {
+          pendingCashCommitments += g.savedAmount;
+          pendingCashCommitmentItems.add(
+            ProjectionLineItem(
+              title: '${g.name} (apartado)',
+              subtitle: 'Reservado en ${acc.name}',
+              amount: g.savedAmount,
+            ),
+          );
         }
       }
     }
@@ -331,7 +507,6 @@ class AdvisorEngine {
     }
 
     // 3. Date-by-Date Cashflow Timeline (next 45 days) & Safe-to-Spend until next payday
-    final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final horizon = today.add(const Duration(days: 45));
     final Map<String, RecurringIncome> incomeById = {
@@ -409,6 +584,34 @@ class AdvisorEngine {
           delta: -c.amount,
           type: TimelineEventType.fixedBill,
         ));
+      }
+    }
+    for (final g in miniGoals) {
+      if (g.isCompleted || g.remainingToSave <= 0) continue;
+      DateTime cursor = DateTime(g.dueDate.year, g.dueDate.month, g.dueDate.day);
+      final endLimit = g.endDate != null
+          ? DateTime(g.endDate!.year, g.endDate!.month, g.endDate!.day)
+          : horizon;
+      final effectiveEnd = endLimit.isBefore(horizon) ? endLimit : horizon;
+      bool first = true;
+      int guard = 0;
+      while (!cursor.isAfter(effectiveEnd) && guard < 60) {
+        if (!cursor.isBefore(today)) {
+          rawEvents.add((
+            date: cursor,
+            title: g.name,
+            subtitle: 'Mini-meta • Falta por cubrir',
+            delta: -(first ? g.remainingToSave : g.targetAmount),
+            type: TimelineEventType.fixedBill,
+          ));
+        }
+        first = false;
+        if (g.repeatDays > 0) {
+          cursor = cursor.add(Duration(days: g.repeatDays));
+        } else {
+          break;
+        }
+        guard++;
       }
     }
 
@@ -863,7 +1066,24 @@ class AdvisorEngine {
       }
       monthMsiItems.sort((a, b) => b.amount.compareTo(a.amount));
 
-      final double totalOblig = msiDue + totalAllFixedCash + totalAllFixedCard;
+      double miniGoalsDue = 0.0;
+      final List<ProjectionLineItem> monthMiniGoalItems = [];
+      for (final g in miniGoals) {
+        final dueAmt = g.amountDueInMonth(target.year, target.month);
+        if (dueAmt > 0) {
+          miniGoalsDue += dueAmt;
+          monthMiniGoalItems.add(
+            ProjectionLineItem(
+              title: g.name,
+              subtitle: 'Mini-meta • Día ${g.dueDate.day}',
+              amount: dueAmt,
+            ),
+          );
+        }
+      }
+
+      final double totalOblig =
+          msiDue + totalAllFixedCash + totalAllFixedCard + miniGoalsDue;
       final double netMonth = monthIncome - totalOblig;
       runningCumulative += netMonth;
 
@@ -875,18 +1095,58 @@ class AdvisorEngine {
           startingLiquidity: 0.0,
           expectedIncome: monthIncome,
           cardOrMsiDue: msiDue,
-          fixedCashDue: totalAllFixedCash,
+          fixedCashDue: totalAllFixedCash + miniGoalsDue,
           fixedCardDue: totalAllFixedCard,
           activeMsiCount: msiCount,
           netMonthlyAvailable: netMonth,
           cumulativeBalance: runningCumulative,
           incomeItems: monthIncomeItems,
           cardOrMsiItems: monthMsiItems,
-          fixedCashItems: allFixedCashItems,
+          fixedCashItems: [...allFixedCashItems, ...monthMiniGoalItems],
           fixedCardItems: allFixedCardItems,
         ),
       );
     }
+
+    // 9. Historical Variable Spend & Monthly Savings Capacity for Goal Timeline
+    final variableCutoff = now.subtract(const Duration(days: 90));
+    final List<Transaction> variableExpenses = [];
+    for (final t in transactions) {
+      if (t.type != MovementType.expense) continue;
+      if (t.date.isBefore(variableCutoff) || t.date.isAfter(now)) continue;
+      if (t.category == 'Pago Tarjeta' || t.category == 'Compras a Meses') {
+        continue;
+      }
+      if (t.isRecurring) continue;
+      final acc = accountById[t.accountId];
+      if (acc != null && !acc.includeInGeneralFinances) continue;
+      variableExpenses.add(t);
+    }
+    double averageMonthlyVariableSpend = 0.0;
+    if (variableExpenses.isNotEmpty) {
+      final totalVar =
+          variableExpenses.fold<double>(0.0, (s, t) => s + t.amount);
+      final earliestVar = variableExpenses
+          .map((t) => t.date)
+          .reduce((a, b) => a.isBefore(b) ? a : b);
+      final spanDays = now.difference(earliestVar).inDays.clamp(1, 90);
+      final monthsSpan = (spanDays / 30.0).clamp(1.0, 3.0);
+      averageMonthlyVariableSpend = totalVar / monthsSpan;
+    }
+
+    final futureProjections = monthlyProjections.skip(1).toList();
+    final double estimatedMonthlyIncome = futureProjections.isNotEmpty
+        ? futureProjections.fold<double>(0.0, (s, p) => s + p.expectedIncome) /
+            futureProjections.length
+        : monthlyIncomeExpectedTotal;
+    final double avgFutureObligations = futureProjections.isNotEmpty
+        ? futureProjections.fold<double>(0.0, (s, p) => s + p.totalObligations) /
+            futureProjections.length
+        : totalMonthlyCommitments;
+    final double estimatedMonthlyTotalSpend =
+        avgFutureObligations + averageMonthlyVariableSpend;
+    final double estimatedMonthlySavingsCapacity =
+        estimatedMonthlyIncome - estimatedMonthlyTotalSpend;
 
     return AdvisorAnalysis(
       netWorth: netWorth,
@@ -922,6 +1182,10 @@ class AdvisorEngine {
       lowestTimelineDate: lowestTimelineDate,
       obligationsBeforeNextPayday: obligationsBeforeNextPayday,
       nextPaydayDate: nextPaydayDate,
+      averageMonthlyVariableSpend: averageMonthlyVariableSpend,
+      estimatedMonthlyIncome: estimatedMonthlyIncome,
+      estimatedMonthlyTotalSpend: estimatedMonthlyTotalSpend,
+      estimatedMonthlySavingsCapacity: estimatedMonthlySavingsCapacity,
       insights: insights,
     );
   }

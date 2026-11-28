@@ -98,6 +98,12 @@ flutter build ipa
 
 ## 📋 Notas de la Versión (Changelog)
 
+### v3.2.0+6
+- **Tiempo Estimado para Metas (2 Escenarios):** La tarjeta principal (`META ACTIVA`) muestra cuánto tiempo tomará completar tu meta bajo dos escenarios (*a tu ritmo actual* vs. *pagando solo fijos y MSI*), con desglose detallado al tocarlo y alertas claras sobre fechas de cobro y dinero libre en los próximos 45 días.
+- **Modo Simple / Avanzado:** Nuevo botón en la barra superior para alternar entre una vista simplificada de `Resumen` (*¿Vas bien? ¿Te alcanza este mes? Siguiente paso*) y el modo avanzado completo, sin modificar tus datos.
+- **Fondo de Emergencia Dedicado:** El Fondo de Emergencia ahora parte de `$0` y solo cuenta el dinero en cuentas marcadas con **"Usar para el Fondo de Emergencia"**, con pantalla dedicada (`Detalle del fondo`), transferencias reales de entrada/salida y bitácora reversible.
+- **Mini-Metas Periódicas (`Plan` y `Resumen`):** Crea apartados para pagos no mensuales (teléfono, seguros, etc.) con ciclos personalizados en días o meses, fecha fin opcional, historial de completadas, transferencia real desde cuenta origen (`Transferir desde`), protección al gastar dinero apartado y recordatorios directos en `Resumen` y `Proyección Mensual`.
+
 ### v3.1.0+5
 - **Analítica por Categoría (`Movimientos → Por Categoría`):** Nueva vista agrupada por categoría con filtro temporal (*Este mes*, *3 meses*, *Este año*, *Todo*), porcentaje del gasto, comparativa contra el mes anterior y pantalla de detalle (`CategoryAnalyticsScreen`) con gráfica mensual interactiva (6M/12M), mes pico, conceptos más frecuentes y edición directa de cualquier movimiento.
 - **Auto-clasificación de Estados de Cuenta y Clasificador Agrupado:** Los estados de cuenta ahora detectan automáticamente comercios conocidos desde la importación; además, `Clasificar Cargos Importados` agrupa comercios repetidos para clasificarlos en 1 toque, permite elegir o editar la palabra clave exacta (o marcar *"No aplica ninguna palabra clave para este cargo"*), crear categorías nuevas al instante y corregir con un toque.

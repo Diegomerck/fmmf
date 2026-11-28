@@ -37,6 +37,7 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
   late AccountPurpose _selectedPurpose;
   late String _selectedColorHex;
   late bool _includeInGeneralFinances;
+  late bool _isEmergencyFund;
   late List<String> _allowedCategories;
   DateTime? _releaseDate;
   String? _releaseTargetAccountId;
@@ -57,6 +58,7 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
     _purposeManuallyChanged = acc != null;
     _includeInGeneralFinances = acc?.includeInGeneralFinances ??
         Account.defaultIncludeInGeneralFinances(_selectedType);
+    _isEmergencyFund = acc?.isEmergencyFund ?? false;
     _includeManuallyChanged = acc != null;
     _multiplierManuallyChanged = acc != null;
     _allowedCategories = List<String>.from(acc?.allowedCategories ?? const []);
@@ -235,6 +237,9 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
       releaseDate: _releaseDate,
       contributionMultiplier: multiplier,
       releaseTargetAccountId: _releaseTargetAccountId,
+      isEmergencyFund: _selectedType == AccountType.creditCard
+          ? false
+          : _isEmergencyFund,
     );
 
     if (_isEditing) {
@@ -600,6 +605,38 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
                 }).toList(),
               ),
               const SizedBox(height: 16),
+              Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _isEmergencyFund
+                        ? AppTheme.electricCyan.withOpacity(0.5)
+                        : AppTheme.border,
+                  ),
+                ),
+                child: SwitchListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                  dense: true,
+                  activeColor: AppTheme.electricCyan,
+                  title: const Text(
+                    'Usar para el Fondo de Emergencia',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'El saldo de esta cuenta contará directamente para tu meta de Fondo de Emergencia.',
+                    style:
+                        TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                  ),
+                  value: _isEmergencyFund,
+                  onChanged: (val) => setState(() => _isEmergencyFund = val),
+                ),
+              ),
+              const SizedBox(height: 12),
               Container(
                 decoration: BoxDecoration(
                   color: AppTheme.surface,

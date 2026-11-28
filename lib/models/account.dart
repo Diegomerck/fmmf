@@ -40,6 +40,7 @@ class Account {
   final DateTime? releaseDate;
   final double contributionMultiplier;
   final String? releaseTargetAccountId;
+  final bool isEmergencyFund;
 
   static AccountPurpose defaultPurposeForType(AccountType type) {
     switch (type) {
@@ -124,7 +125,8 @@ class Account {
     this.releaseDate,
     double? contributionMultiplier,
     this.releaseTargetAccountId,
-  })  : purpose = purpose ?? defaultPurposeForType(type),
+    this.isEmergencyFund = false,
+  }) : purpose = purpose ?? defaultPurposeForType(type),
         includeInGeneralFinances =
             includeInGeneralFinances ?? defaultIncludeInGeneralFinances(type),
         contributionMultiplier =
@@ -179,6 +181,7 @@ class Account {
     double? contributionMultiplier,
     String? releaseTargetAccountId,
     bool clearReleaseTargetAccountId = false,
+    bool? isEmergencyFund,
   }) {
     final nextType = type ?? this.type;
     return Account(
@@ -205,6 +208,9 @@ class Account {
       releaseTargetAccountId: clearReleaseTargetAccountId
           ? null
           : (releaseTargetAccountId ?? this.releaseTargetAccountId),
+      isEmergencyFund: nextType == AccountType.creditCard
+          ? false
+          : (isEmergencyFund ?? this.isEmergencyFund),
     );
   }
 
@@ -230,6 +236,7 @@ class Account {
     'releaseDate': releaseDate?.toIso8601String(),
     'contributionMultiplier': contributionMultiplier,
     'releaseTargetAccountId': releaseTargetAccountId,
+    'isEmergencyFund': isEmergencyFund,
   };
 
   factory Account.fromJson(Map<String, dynamic> json) {
@@ -266,6 +273,8 @@ class Account {
           : null,
       contributionMultiplier: (json['contributionMultiplier'] as num?)?.toDouble(),
       releaseTargetAccountId: json['releaseTargetAccountId'] as String?,
+      isEmergencyFund: type != AccountType.creditCard &&
+          ((json['isEmergencyFund'] as bool?) ?? false),
     );
   }
 }

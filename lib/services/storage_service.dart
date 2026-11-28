@@ -11,6 +11,7 @@ import '../models/recurring_income.dart';
 import '../models/credit_installment.dart';
 import '../models/imported_statement.dart';
 import '../models/movement_category.dart';
+import '../models/mini_goal.dart';
 import 'firestore_service.dart';
 
 enum CloudSyncStatus { idle, syncing, synced, error }
@@ -33,6 +34,8 @@ class StorageService {
   static const String _keyEmergencyFundEnabled = 'fmmf_emergency_fund_enabled';
   static const String _keySafetyCushion = 'fmmf_safety_cushion';
   static const String _keySurplusGoalOrder = 'fmmf_surplus_goal_order';
+  static const String _keySimpleMode = 'fmmf_simple_mode';
+  static const String _keyMiniGoals = 'fmmf_mini_goals';
   static const String _keyIncludeExtraDebtGoal = 'fmmf_include_extra_debt_goal';
   static const String _keyPendingCloudSync = 'fmmf_pending_cloud_sync';
 
@@ -223,6 +226,23 @@ class StorageService {
     final raw = jsonEncode(commitments.map((e) => e.toJson()).toList());
     await _prefs.setString(_keyCommitments, raw);
     await _syncToCloud<BudgetCommitment>(FirestoreService.colCommitments, commitments, (e) => e.id, (e) => e.toJson());
+  }
+
+  // --- MINI GOALS (SINKING FUNDS) ---
+  List<MiniGoal> loadMiniGoals() {
+    final raw = _prefs.getString(_keyMiniGoals);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return list.map((e) => MiniGoal.fromJson(e as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveMiniGoals(List<MiniGoal> goals) async {
+    final raw = jsonEncode(goals.map((e) => e.toJson()).toList());
+    await _prefs.setString(_keyMiniGoals, raw);
   }
 
   // --- SAVINGS RULES ---
@@ -542,6 +562,12 @@ class StorageService {
 
   bool loadIncludeExtraDebtGoal() =>
       _prefs.getBool(_keyIncludeExtraDebtGoal) ?? false;
+
+  bool loadSimpleMode() => _prefs.getBool(_keySimpleMode) ?? false;
+
+  Future<void> saveSimpleMode(bool enabled) async {
+    await _prefs.setBool(_keySimpleMode, enabled);
+  }
 
   Future<void> saveIncludeExtraDebtGoal(bool include) async {
     await _prefs.setBool(_keyIncludeExtraDebtGoal, include);

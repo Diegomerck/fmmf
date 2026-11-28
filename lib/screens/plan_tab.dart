@@ -4,12 +4,16 @@ import '../core/utils/currency_format.dart';
 import '../models/account.dart';
 import '../models/budget_commitment.dart';
 import '../models/financial_insight.dart';
+import '../models/mini_goal.dart';
 import '../models/recurring_income.dart';
 import '../models/savings_rule.dart';
 import '../providers/finance_provider.dart';
+import '../services/advisor_engine.dart';
 import 'pay_schedule_screen.dart';
 import 'widgets/commitment_form_sheet.dart';
 import 'widgets/expandable_breakdown_row.dart';
+import 'widgets/mini_goal_sheet.dart';
+import 'widgets/mini_goal_transfer_sheet.dart';
 import 'widgets/pending_incomes_section.dart';
 import 'widgets/pending_transfers_section.dart';
 import 'widgets/recurring_income_sheet.dart';
@@ -70,6 +74,79 @@ class PlanTab extends StatelessWidget {
             _emptyNote('Configura tu sueldo o ingresos (diario, semanal, quincenal, mensual o personalizado).')
           else
             ...provider.recurringIncomes.map((inc) => _buildIncomeCard(context, inc)),
+
+          const SizedBox(height: 20),
+          const Divider(color: AppTheme.border),
+          const SizedBox(height: 16),
+
+          // 1b. Mini-Metas (Gastos Periódicos)
+          _buildSectionRow(
+            title: 'Mini-Metas Periódicas',
+            icon: Icons.flag_outlined,
+            color: AppTheme.amberGold,
+            actionLabel: 'Agregar',
+            onAction: () => showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (_) => MiniGoalSheet(provider: provider),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Builder(
+            builder: (context) {
+              final activeGoals = provider.miniGoals
+                  .where((g) => g.isVisibleInActiveSection())
+                  .toList();
+              final archivedGoals = provider.miniGoals
+                  .where((g) => !g.isVisibleInActiveSection())
+                  .toList();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (activeGoals.isEmpty)
+                    _emptyNote(
+                        'Agrega pagos que haces cada varios meses (teléfono, seguro, predial) para saber si apartar o si tu ingreso los cubre.')
+                  else
+                    ...activeGoals
+                        .map((g) => _buildMiniGoalCard(context, g, analysis)),
+                  if (archivedGoals.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(top: 6),
+                      decoration: BoxDecoration(
+                        color: AppTheme.card.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: Theme(
+                        data: Theme.of(context)
+                            .copyWith(dividerColor: Colors.transparent),
+                        child: ExpansionTile(
+                          tilePadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 0),
+                          childrenPadding:
+                              const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                          iconColor: AppTheme.emeraldGreen,
+                          collapsedIconColor: AppTheme.textSecondary,
+                          title: Text(
+                            'Mini-Metas Completadas (${archivedGoals.length})',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.emeraldGreen,
+                            ),
+                          ),
+                          children: archivedGoals
+                              .map((g) =>
+                                  _buildMiniGoalCard(context, g, analysis))
+                              .toList(),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
 
           const SizedBox(height: 20),
           const Divider(color: AppTheme.border),
@@ -199,18 +276,26 @@ class PlanTab extends StatelessWidget {
     required VoidCallback onAction,
   }) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Row(
-          children: [
-            Icon(icon, size: 18, color: color),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
-            ),
-          ],
+        Expanded(
+          child: Row(
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white),
+                ),
+              ),
+            ],
+          ),
         ),
+        const SizedBox(width: 8),
         TextButton.icon(
           icon: Icon(Icons.add, size: 16, color: color),
           label: Text(actionLabel, style: TextStyle(color: color, fontSize: 13)),
@@ -586,7 +671,7 @@ class PlanTab extends StatelessWidget {
                     ),
                   if (fCash > 0)
                     ExpandableBreakdownRow(
-                      label: '− Gastos Fijos (Débito/Efect.)',
+                      label: '− Gastos Fijos y Mini-Metas',
                       amount: -fCash,
                       color: AppTheme.amberGold,
                       items: p.fixedCashItems,
@@ -657,6 +742,386 @@ class PlanTab extends StatelessWidget {
           const SizedBox(height: 6),
           Text(insight.message, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.35)),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMiniGoalCard(
+    BuildContext context,
+    MiniGoal goal,
+    AdvisorAnalysis analysis,
+  ) {
+    final double monthlyNeed = goal.recommendedMonthlySave();
+    final matchingProj = analysis.monthlyProjections
+        .where((p) => p.year == goal.dueDate.year && p.month == goal.dueDate.month)
+        .firstOrNull;
+    final linkedAccount = goal.accountId != null
+        ? provider.accounts.where((a) => a.id == goal.accountId).firstOrNull
+        : null;
+    final double totalEarmarkedInAcc = linkedAccount != null
+        ? provider.earmarkedMiniGoalsForAccount(linkedAccount.id)
+        : 0.0;
+    final bool accountShortForEarmark = !goal.isCompleted &&
+        linkedAccount != null &&
+        goal.savedAmount > 0 &&
+        linkedAccount.balance + 0.01 < totalEarmarkedInAcc;
+
+    final String repeatLabel = goal.repeatLabel;
+    final String endLabel = goal.endDate != null
+        ? ' • Fin: ${goal.endDate!.day}/${goal.endDate!.month}/${goal.endDate!.year}'
+        : '';
+
+    final String projectionMsg;
+    final Color projectionColor;
+    if (goal.isCompleted) {
+      final doneDate = goal.completedAt;
+      projectionMsg = doneDate != null
+          ? 'Meta completada el ${doneDate.day}/${doneDate.month}/${doneDate.year}. Puedes editarla o reactivarla si la vuelves a necesitar.'
+          : 'Meta completada. Puedes editarla o reactivarla si la vuelves a necesitar.';
+      projectionColor = AppTheme.emeraldGreen;
+    } else if (goal.remainingToSave <= 0) {
+      projectionMsg = '¡Ya tienes completo este pago!';
+      projectionColor = AppTheme.emeraldGreen;
+    } else if (matchingProj != null) {
+      if (matchingProj.cumulativeBalance >= 0) {
+        projectionMsg =
+            'Sin apartar antes, con tu ingreso y saldo proyectado sí te alcanza ese mes (+${CurrencyFormat.formatMXN(matchingProj.cumulativeBalance, includeDecimals: false)}).';
+        projectionColor = AppTheme.emeraldGreen;
+      } else {
+        projectionMsg =
+            'Sin apartar antes, ese mes te faltarían ${CurrencyFormat.formatMXN(-matchingProj.cumulativeBalance, includeDecimals: false)}. Conviene apartar ~${CurrencyFormat.formatMXN(monthlyNeed, includeDecimals: false)}/mes.';
+        projectionColor = AppTheme.amberGold;
+      }
+    } else {
+      final months = goal.monthsUntilDue();
+      final estCap = analysis.estimatedMonthlySavingsCapacity *
+          (months > 0 ? months : 1);
+      if (estCap >= goal.remainingToSave) {
+        projectionMsg =
+            'Tu capacidad de ahorro proyectada cubre este pago; si prefieres apartarlo antes, son ~${CurrencyFormat.formatMXN(monthlyNeed, includeDecimals: false)}/mes.';
+        projectionColor = AppTheme.emeraldGreen;
+      } else {
+        projectionMsg =
+            'Conviene apartar ~${CurrencyFormat.formatMXN(monthlyNeed, includeDecimals: false)}/mes para llegar cómodo a la fecha.';
+        projectionColor = AppTheme.amberGold;
+      }
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.flag_outlined,
+                  size: 18, color: AppTheme.amberGold),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      goal.name,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                    Text(
+                      goal.isCompleted
+                          ? 'Completada • $repeatLabel'
+                          : 'Fecha: ${goal.dueDate.day}/${goal.dueDate.month}/${goal.dueDate.year} • $repeatLabel$endLabel',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (goal.isCompleted)
+                Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppTheme.emeraldGreen.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Completada',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.emeraldGreen,
+                    ),
+                  ),
+                ),
+              Text(
+                CurrencyFormat.formatMXN(goal.targetAmount,
+                    includeDecimals: false),
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert,
+                    size: 18, color: AppTheme.textSecondary),
+                color: AppTheme.surface,
+                onSelected: (val) {
+                  if (val == 'edit') {
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      backgroundColor: Colors.transparent,
+                      builder: (_) =>
+                          MiniGoalSheet(provider: provider, existingGoal: goal),
+                    );
+                  } else if (val == 'undo') {
+                    provider.undoLastMiniGoalPayment(goal);
+                  } else if (val == 'reactivate') {
+                    provider.reactivateMiniGoal(goal);
+                  } else if (val == 'delete') {
+                    provider.deleteMiniGoal(goal.id);
+                  }
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child:
+                        Text('Editar', style: TextStyle(color: Colors.white)),
+                  ),
+                  if (goal.paymentHistory.isNotEmpty)
+                    const PopupMenuItem(
+                      value: 'undo',
+                      child: Text('Deshacer último pago',
+                          style: TextStyle(color: AppTheme.amberGold)),
+                    ),
+                  if (goal.isCompleted)
+                    const PopupMenuItem(
+                      value: 'reactivate',
+                      child: Text('Reactivar meta',
+                          style: TextStyle(color: AppTheme.electricCyan)),
+                    ),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Text('Eliminar',
+                        style: TextStyle(color: AppTheme.alertCoral)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: goal.progress,
+                    minHeight: 5,
+                    backgroundColor: AppTheme.surface,
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                        AppTheme.amberGold),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Apartado: ${CurrencyFormat.formatMXN(goal.savedAmount, includeDecimals: false)}',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.amberGold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (linkedAccount != null && !goal.isCompleted) ...[
+            Text(
+              'Guardado en: ${linkedAccount.name} (${CurrencyFormat.formatMXN(linkedAccount.balance, includeDecimals: false)})',
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppTheme.textMuted,
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
+          if (accountShortForEarmark) ...[
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.alertCoral.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppTheme.alertCoral.withOpacity(0.35)),
+              ),
+              child: Text(
+                'Ojo: el saldo real de ${linkedAccount.name} (${CurrencyFormat.formatMXN(linkedAccount.balance, includeDecimals: false)}) ya no alcanza para cubrir todo lo apartado (${CurrencyFormat.formatMXN(totalEarmarkedInAcc, includeDecimals: false)}).',
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppTheme.alertCoral,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ],
+          Text(
+            projectionMsg,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: projectionColor,
+              height: 1.3,
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (!goal.isCompleted)
+            Row(
+              children: [
+                if (goal.remainingToSave > 0)
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        final addAmt = monthlyNeed > 0
+                            ? monthlyNeed
+                            : goal.remainingToSave;
+                        if (goal.accountId == null) {
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: Colors.transparent,
+                            builder: (_) => MiniGoalSheet(
+                                provider: provider, existingGoal: goal),
+                          );
+                          return;
+                        }
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (_) => MiniGoalTransferSheet(
+                            provider: provider,
+                            goal: goal,
+                            suggestedAmount: addAmt,
+                          ),
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.amberGold,
+                        side: BorderSide(
+                            color: AppTheme.amberGold.withOpacity(0.5)),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
+                      child: Text(
+                        '+ Apartar ${CurrencyFormat.formatMXN(monthlyNeed > 0 ? monthlyNeed : goal.remainingToSave, includeDecimals: false)}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ),
+                if (goal.remainingToSave > 0) const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _confirmMarkMiniGoalPaid(context, goal),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.emeraldGreen.withOpacity(0.2),
+                      foregroundColor: AppTheme.emeraldGreen,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                    child: const Text(
+                      'Marcar pagado en este periodo',
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmMarkMiniGoalPaid(BuildContext context, MiniGoal goal) {
+    final bool hasNext = goal.hasNextCycleBeforeEnd;
+    final nextDate = goal.nextCycleDate();
+    bool completeEarly = !hasNext;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.card,
+          title: Text(
+            'Confirmar pago • ${goal.name}',
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '¿Confirmas que ya pagaste ${CurrencyFormat.formatMXN(goal.targetAmount)}?',
+                style: const TextStyle(color: Colors.white, fontSize: 13.5),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                completeEarly
+                    ? 'Se marcará como Completada y quedará visible este mes antes de pasar a tu historial de Mini-Metas Completadas.'
+                    : 'La próxima fecha se actualizará al ${nextDate.day}/${nextDate.month}/${nextDate.year}. (Siempre puedes deshacerlo en el menú ⋮).',
+                style:
+                    const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+              ),
+              if (hasNext) ...[
+                const SizedBox(height: 10),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  activeColor: AppTheme.emeraldGreen,
+                  title: const Text(
+                    'Ya no haré este pago (completar meta)',
+                    style: TextStyle(color: Colors.white, fontSize: 12.5),
+                  ),
+                  value: completeEarly,
+                  onChanged: (v) =>
+                      setDialogState(() => completeEarly = v ?? false),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar',
+                  style: TextStyle(color: AppTheme.textSecondary)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                provider.markMiniGoalPaid(goal, completeGoal: completeEarly);
+                Navigator.pop(ctx);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.emeraldGreen,
+                foregroundColor: Colors.black,
+              ),
+              child: const Text('Sí, confirmar pago'),
+            ),
+          ],
+        ),
       ),
     );
   }

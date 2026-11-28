@@ -103,6 +103,60 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             actions: [
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Tooltip(
+                    message: widget.provider.simpleMode
+                        ? 'Modo Simple activo (toca para cambiar a Avanzado)'
+                        : 'Modo Avanzado activo (toca para cambiar a Simple)',
+                    child: InkWell(
+                      onTap: () => widget.provider.toggleSimpleMode(),
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: widget.provider.simpleMode
+                              ? AppTheme.emeraldGreen.withOpacity(0.16)
+                              : Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: widget.provider.simpleMode
+                                ? AppTheme.emeraldGreen.withOpacity(0.5)
+                                : AppTheme.border,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              widget.provider.simpleMode
+                                  ? Icons.auto_awesome_rounded
+                                  : Icons.tune_rounded,
+                              size: 13,
+                              color: widget.provider.simpleMode
+                                  ? AppTheme.emeraldGreen
+                                  : AppTheme.textSecondary,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              widget.provider.simpleMode ? 'Simple' : 'Avanzado',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: widget.provider.simpleMode
+                                    ? AppTheme.emeraldGreen
+                                    : AppTheme.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               CloudSyncBadge(provider: widget.provider),
             ],
           ),

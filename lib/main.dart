@@ -9,7 +9,7 @@ import 'screens/home_screen.dart';
 import 'services/auth_service.dart';
 import 'services/storage_service.dart';
 
-const String kAppVersion = '3.1.0';
+const String kAppVersion = '3.2.0';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
